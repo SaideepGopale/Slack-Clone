@@ -1,0 +1,22 @@
+export interface User {
+  id: string;
+  username: string;
+}
+
+export interface Channel {
+  id: string;
+  name: string;
+}
+
+export interface Message {
+  id: string;
+  channelId: string;
+  sender: {
+    username: string;
+  };
+  content?: string;
+  fileUrl?: string;
+  fileName?: string;
+  fileType?: string;
+  createdAt: string;
+}

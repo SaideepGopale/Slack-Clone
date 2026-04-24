@@ -1,0 +1,6 @@
+{
+  "name": "Slick Chat",
+  "description": "A full-scale Slack clone with real-time messaging, file uploads, and channel management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["real-time", "file-sharing", "auth"]
+}

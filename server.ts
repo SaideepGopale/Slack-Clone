@@ -1,0 +1,131 @@
+import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+import { createServer as createViteServer } from 'vite';
+import dotenv from 'dotenv';
+import jwt from 'jsonwebtoken';
+import multer from 'multer';
+
+// Internal Imports
+import authRoutes from './backend/routes/auth.ts';
+import channelRoutes from './backend/routes/channels.ts';
+import { dbCheck, errorHandler } from './backend/middleware/index.ts';
+import { prisma } from './backend/lib/prisma.ts';
+
+dotenv.config();
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Uploads setup
+const uploadDir = 'uploads';
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+
+const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, { 
+  cors: { origin: '*' },
+  transports: ['websocket', 'polling']
+});
+
+const PORT = 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'secret-key-456';
+
+// Multer
+const upload = multer({ dest: 'uploads/' });
+
+app.use(cors());
+app.use(express.json());
+app.use('/uploads', express.static(uploadDir));
+
+// Routes
+app.get('/api/health', async (req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ database: 'connected' });
+  } catch (err) {
+    res.status(500).json({ database: 'disconnected' });
+  }
+});
+app.use('/api', dbCheck);
+app.use('/api/auth', authRoutes);
+app.use('/api/channels', channelRoutes);
+app.post('/api/upload', upload.single('file'), (req: any, res) => {
+  res.json({ url: `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`, name: req.file.originalname, type: req.file.mimetype });
+});
+
+app.use(errorHandler);
+
+// Socket Logic
+io.use((socket, next) => {
+  let token = socket.handshake.auth?.token;
+  
+  if (!token || token === 'null' || token === 'undefined') {
+    console.warn(`Socket Auth: No valid token provided from ${socket.id}`);
+    return next(new Error('Authentication Error: Missing Token'));
+  }
+
+  jwt.verify(token, JWT_SECRET, (err: any, decoded: any) => {
+    if (err) {
+      console.error(`Socket Auth: JWT verification failed for ${socket.id}:`, err.message);
+      return next(new Error('Authentication Error: Invalid or Expired Token'));
+    }
+    (socket as any).user = decoded;
+    next();
+  });
+});
+
+const onlineUsers = new Map();
+
+io.on('connection', (socket) => {
+  const user = (socket as any).user;
+  onlineUsers.set(socket.id, user);
+  io.emit('user:online', Array.from(onlineUsers.values()));
+
+  socket.on('channel:join', (chanId) => {
+    socket.rooms.forEach(r => { if (r !== socket.id) socket.leave(r); });
+    socket.join(chanId);
+  });
+
+  socket.on('message:send', async (data) => {
+    try {
+      const msg = await prisma.message.create({
+        data: {
+          content: data.content,
+          fileUrl: data.fileUrl,
+          fileName: data.fileName,
+          fileType: data.fileType,
+          channelId: data.channelId,
+          senderId: user.id
+        },
+        include: {
+          sender: {
+            select: { username: true }
+          }
+        }
+      });
+      io.to(data.channelId).emit('message:received', msg);
+    } catch (err) {
+      console.error('Failed to save message:', err);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    onlineUsers.delete(socket.id);
+    io.emit('user:online', Array.from(onlineUsers.values()));
+  });
+});
+
+// Vite
+(async () => {
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });
+    app.use(vite.middlewares);
+  } else {
+    app.use(express.static('dist'));
+    app.get('*', (_, res) => res.sendFile(path.resolve(__dirname, 'dist', 'index.html')));
+  }
+  httpServer.listen(PORT, '0.0.0.0', () => console.log(`Server on ${PORT}`));
+})();

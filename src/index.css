@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@theme {
+  --color-slack-purple: #3f0e40;
+  --color-slack-purple-hover: #350d36;
+  --color-slack-sidebar-hover: rgba(255, 255, 255, 0.1);
+  --color-slack-active: #1164a3;
+  --color-slack-green: #2bac76;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+.slack-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.slack-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.slack-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 4px;
+}
+
+.slack-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+/* Sidebar scrollbar */
+.sidebar-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.sidebar-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
