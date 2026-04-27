@@ -17,6 +17,7 @@ import { dbCheck, errorHandler } from './backend/middleware/index.ts';
 import { prisma } from './backend/lib/prisma.ts';
 
 dotenv.config();
+console.log("DATABASE_URL:", process.env.DATABASE_URL);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Uploads setup
