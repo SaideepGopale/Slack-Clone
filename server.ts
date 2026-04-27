@@ -13,11 +13,11 @@ import multer from 'multer';
 // Internal Imports
 import authRoutes from './backend/routes/auth.ts';
 import channelRoutes from './backend/routes/channels.ts';
+import userRoutes from './backend/routes/users.ts';
 import { dbCheck, errorHandler } from './backend/middleware/index.ts';
 import { prisma } from './backend/lib/prisma.ts';
 
 dotenv.config();
-console.log("DATABASE_URL:", process.env.DATABASE_URL);
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Uploads setup
@@ -43,16 +43,29 @@ app.use('/uploads', express.static(uploadDir));
 
 // Routes
 app.get('/api/health', async (req, res) => {
+  const dbUrl = process.env.DATABASE_URL || '';
+  const maskedUrl = dbUrl.replace(/:.+@/, ':****@');
+  console.log('Health check - DB URL:', maskedUrl);
+
+  if (!dbUrl) {
+    return res.json({ database: 'missing_config', message: 'DATABASE_URL not set' });
+  }
   try {
     await prisma.$queryRaw`SELECT 1`;
     res.json({ database: 'connected' });
-  } catch (err) {
-    res.status(500).json({ database: 'disconnected' });
+  } catch (err: any) {
+    console.error('Database connection error:', err);
+    res.json({ 
+      database: 'error', 
+      message: 'Connection failed',
+      details: err.message
+    });
   }
 });
 app.use('/api', dbCheck);
 app.use('/api/auth', authRoutes);
 app.use('/api/channels', channelRoutes);
+app.use('/api/users', userRoutes);
 app.post('/api/upload', upload.single('file'), (req: any, res) => {
   res.json({ url: `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`, name: req.file.originalname, type: req.file.mimetype });
 });
@@ -66,6 +79,11 @@ io.use((socket, next) => {
   if (!token || token === 'null' || token === 'undefined') {
     console.warn(`Socket Auth: No valid token provided from ${socket.id}`);
     return next(new Error('Authentication Error: Missing Token'));
+  }
+
+  if (token === 'guest-token') {
+    (socket as any).user = { id: 'guest', username: 'Guest Explorer', email: 'guest@slick.demo' };
+    return next();
   }
 
   jwt.verify(token, JWT_SECRET, (err: any, decoded: any) => {
@@ -99,17 +117,50 @@ io.on('connection', (socket) => {
           fileName: data.fileName,
           fileType: data.fileType,
           channelId: data.channelId,
-          senderId: user.id
+          senderId: user.id,
+          parentId: data.parentId
         },
         include: {
           sender: {
             select: { username: true }
+          },
+          parent: {
+            include: {
+              sender: {
+                select: { username: true }
+              }
+            }
           }
         }
       });
       io.to(data.channelId).emit('message:received', msg);
     } catch (err) {
       console.error('Failed to save message:', err);
+    }
+  });
+
+  socket.on('message:edit', async (data) => {
+    try {
+      const existing = await prisma.message.findUnique({
+        where: { id: data.id }
+      });
+      
+      if (!existing || existing.senderId !== user.id) {
+        return;
+      }
+
+      const updated = await prisma.message.update({
+        where: { id: data.id },
+        data: { content: data.content },
+        include: {
+          sender: {
+            select: { username: true }
+          }
+        }
+      });
+      io.to(updated.channelId).emit('message:updated', updated);
+    } catch (err) {
+      console.error('Failed to edit message:', err);
     }
   });
 

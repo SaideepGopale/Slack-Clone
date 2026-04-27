@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../../contexts/AuthContext';
-import { motion } from 'motion/react';
-import { Circle } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Circle, ArrowRight, UserPlus, LogIn, ShieldCheck, Zap } from 'lucide-react';
 
 export const AuthForm = () => {
-  const { login, register } = useAuth();
+  const { login, register, skipLogin } = useAuth();
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -18,11 +18,23 @@ export const AuthForm = () => {
     const checkDb = async () => {
       try {
         const res = await axios.get('/api/health');
-        setDbStatus(res.data.database === 'connected' ? 'connected' : 'error');
-      } catch { setDbStatus('error'); }
+        if (res.data.database === 'connected') {
+          setDbStatus('connected');
+          setError('');
+        } else if (res.data.database === 'missing_config') {
+          setDbStatus('error');
+          setError('Database configuration (DATABASE_URL) is missing in Secrets.');
+        } else {
+          setDbStatus('error');
+          setError(`Database connection failed: ${res.data.details || 'Check your credentials.'}`);
+        }
+      } catch { 
+        setDbStatus('error'); 
+        setError('Server health check failed.');
+      }
     };
     checkDb();
-    const interval = setInterval(checkDb, 5000);
+    const interval = setInterval(checkDb, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -35,92 +47,208 @@ export const AuthForm = () => {
     setError('');
     setLoading(true);
     try {
-      isLogin ? await login(email, password) : await register(username, email, password);
+      if (isLogin) {
+        await login(email, password);
+      } else {
+        await register(username, email, password);
+      }
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Auth failed. Check your connection.');
-    } finally { setLoading(false); }
+      setError(err.response?.data?.error || 'Authentication failed. Please check your credentials.');
+    } finally { 
+      setLoading(false); 
+    }
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center p-6 bg-white overflow-y-auto">
-      <div className="w-full max-w-2xl flex flex-col items-center pt-20 mb-20">
-        <div className="flex items-center gap-3 mb-10">
-          <div className="w-12 h-12 bg-slack-purple rounded flex items-center justify-center text-white font-black text-2xl shadow-lg">S</div>
-          <h1 className="text-4xl font-black text-gray-900 tracking-tight">Slick</h1>
-        </div>
-        
-        <h2 className="text-4xl font-black text-gray-900 mb-4 text-center tracking-tight leading-tight px-4">
-          {isLogin ? 'Sign in to Slick' : 'First, enter your details'}
-        </h2>
+    <div className="min-h-screen bg-white selection:bg-slack-purple/10 overflow-y-auto overflow-x-hidden">
+      {/* Decorative background elements */}
+      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
+        <motion.div 
+          animate={{ x: [0, 50, 0], y: [0, 30, 0] }}
+          transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+          className="absolute -top-48 -left-48 w-[600px] h-[600px] bg-slack-purple/5 rounded-full blur-[120px]" 
+        />
+        <motion.div 
+          animate={{ x: [0, -50, 0], y: [0, -30, 0] }}
+          transition={{ duration: 25, repeat: Infinity, ease: "linear" }}
+          className="absolute -bottom-48 -right-48 w-[500px] h-[500px] bg-slack-active/5 rounded-full blur-[120px]" 
+        />
+      </div>
 
-        <div className="flex items-center gap-2 mb-8 bg-gray-50 px-4 py-1.5 rounded-full border border-gray-100">
-           <div className={`w-2 h-2 rounded-full ${dbStatus === 'connected' ? 'bg-emerald-500' : 'bg-rose-500 animate-pulse'}`}></div>
-           <span className="text-[10px] font-bold uppercase tracking-widest text-gray-400">
-             Database: {dbStatus === 'checking' ? 'Checking...' : dbStatus === 'connected' ? 'Connected' : 'Offline'}
-           </span>
-        </div>
-        
-        <p className="text-gray-500 font-medium text-center mb-10 max-w-sm px-4 leading-relaxed">
-          We suggest using the <b>email address you use for work.</b>
-        </p>
-        
-        <div className="w-full max-w-sm px-4">
-          {error && (
-            <div className="bg-rose-50 text-rose-600 p-4 rounded-xl mb-6 text-sm border border-rose-100 flex items-center gap-3 font-medium">
-              <Circle size={10} fill="currentColor" stroke="none" />
-              {error}
-            </div>
-          )}
-          
-          <form onSubmit={handleAuth} className="space-y-4">
-            {!isLogin && (
-              <input 
-                type="text" 
-                placeholder="Name" 
-                required 
-                className="w-full p-4 border-2 border-gray-100 rounded-xl outline-none focus:border-slack-active font-bold text-gray-800 placeholder:text-gray-300 transition-all" 
-                value={username} 
-                onChange={e => setUsername(e.target.value)} 
-              />
-            )}
-            <input 
-              type="email" 
-              placeholder="name@work-email.com" 
-              required 
-              className="w-full p-4 border-2 border-gray-100 rounded-xl outline-none focus:border-slack-active font-bold text-gray-800 placeholder:text-gray-300 transition-all" 
-              value={email} 
-              onChange={e => setEmail(e.target.value)} 
-            />
-            <input 
-              type="password" 
-              placeholder="Password" 
-              required 
-              className="w-full p-4 border-2 border-gray-100 rounded-xl outline-none focus:border-slack-active font-bold text-gray-800 placeholder:text-gray-300 transition-all" 
-              value={password} 
-              onChange={e => setPassword(e.target.value)} 
-            />
-            <button 
-              type="submit" 
-              disabled={loading}
-              className="w-full bg-slack-purple text-white font-black p-4 rounded-xl hover:bg-slack-purple-hover disabled:opacity-50 transition-all active:scale-[0.98] shadow-xl shadow-purple-900/10"
-            >
-              {loading ? 'Confirming...' : (isLogin ? 'Sign In' : 'Continue')}
-            </button>
-          </form>
-          
-          <div className="mt-12 text-center">
-             <p className="text-gray-500 font-medium">
-              {isLogin ? "New to Slick?" : "Already member?"}
-              <button 
-                onClick={() => { setIsLogin(!isLogin); setError(''); }} 
-                className="ml-2 text-slack-active font-black hover:underline"
-              >
-                {isLogin ? 'Create an account' : 'Log in instead'}
-              </button>
-            </p>
+      <div className="relative z-10 w-full min-h-screen flex flex-col items-center">
+        {/* Header/Logo */}
+        <motion.div 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full flex justify-center py-8 md:py-12"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 md:w-12 md:h-12 bg-slack-purple rounded-xl flex items-center justify-center text-white font-black text-xl md:text-2xl shadow-xl">S</div>
+            <h1 className="text-2xl md:text-3xl font-black text-gray-900 tracking-tight">Slick</h1>
           </div>
+        </motion.div>
+
+        <div className="w-full max-w-6xl flex flex-col md:flex-row items-center md:items-start justify-center gap-8 md:gap-16 lg:gap-24 px-6 pb-20">
+          {/* Left Content - Marketing/Info */}
+          <motion.div 
+            initial={{ opacity: 0, x: -30 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="flex flex-col max-w-md w-full text-center md:text-left"
+          >
+            <h2 className="text-3xl md:text-4xl lg:text-5xl font-black text-gray-900 mb-6 leading-tight tracking-tight">
+              {isLogin ? 'Welcome back to the workspace.' : 'Where the future of work happens.'}
+            </h2>
+            <p className="text-base md:text-lg text-gray-500 font-medium mb-8 md:mb-10 leading-relaxed">
+              Ditch the noise. Connect with your team in a beautifully designed space that facilitates focus and creativity.
+            </p>
+            
+            <div className="hidden md:flex flex-col gap-6">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-emerald-50 rounded-xl text-emerald-600 shrink-0">
+                  <ShieldCheck size={24} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-gray-900">Secure Database</h4>
+                  <p className="text-sm text-gray-500 font-medium whitespace-nowrap">Encryption at rest and in transit.</p>
+                </div>
+              </div>
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-blue-50 rounded-xl text-blue-600 shrink-0">
+                  <Zap size={24} />
+                </div>
+                <div>
+                  <h4 className="font-bold text-gray-900">Instant Sync</h4>
+                  <p className="text-sm text-gray-500 font-medium whitespace-nowrap">Built on ultra-fast WebSocket cores.</p>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Right Content - Form */}
+          <motion.div 
+            initial={{ opacity: 0, y: 30 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="w-full max-w-md"
+          >
+            <div className="bg-white p-6 md:p-10 rounded-[2.5rem] border border-gray-100 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.08)] flex flex-col">
+
+              <div className="flex bg-gray-50 p-1.5 rounded-2xl mb-8">
+                <button 
+                  onClick={() => setIsLogin(true)}
+                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-black text-sm transition-all ${isLogin ? 'bg-white shadow-md text-gray-900' : 'text-gray-400 hover:text-gray-600'}`}
+                >
+                  <LogIn size={16} />
+                  Login
+                </button>
+                <button 
+                  onClick={() => setIsLogin(false)}
+                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-black text-sm transition-all ${!isLogin ? 'bg-white shadow-md text-gray-900' : 'text-gray-400 hover:text-gray-600'}`}
+                >
+                  <UserPlus size={16} />
+                  Sign Up
+                </button>
+              </div>
+
+              <AnimatePresence mode="wait">
+                <motion.div 
+                  key={isLogin ? 'login' : 'register'}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <h3 className="text-2xl font-black text-gray-900 mb-2 tracking-tight">
+                    {isLogin ? 'Sign In' : 'Create Account'}
+                  </h3>
+                  <p className="text-gray-400 text-sm font-medium mb-8">
+                    {isLogin ? 'Enter your details to continue.' : 'Start your journey with Slick today.'}
+                  </p>
+
+                  {error && (
+                    <motion.div 
+                      initial={{ scale: 0.95, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      className="bg-rose-50 text-rose-600 p-4 rounded-2xl mb-6 text-sm border border-rose-100 flex items-start gap-3"
+                    >
+                      <Circle size={10} className="mt-1" fill="currentColor" stroke="none" />
+                      <span className="font-bold">{error}</span>
+                    </motion.div>
+                  )}
+
+                  <form onSubmit={handleAuth} className="space-y-4">
+                    {!isLogin && (
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">Full Name</label>
+                        <input 
+                          type="text" 
+                          placeholder="What should we call you?" 
+                          required 
+                          className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl outline-none focus:bg-white focus:border-slack-active text-gray-800 font-bold placeholder:text-gray-300 transition-all" 
+                          value={username} 
+                          onChange={e => setUsername(e.target.value)} 
+                        />
+                      </div>
+                    )}
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">Email Address</label>
+                      <input 
+                        type="email" 
+                        placeholder="name@company.com" 
+                        required 
+                        className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl outline-none focus:bg-white focus:border-slack-active text-gray-800 font-bold placeholder:text-gray-300 transition-all" 
+                        value={email} 
+                        onChange={e => setEmail(e.target.value)} 
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">Secret Password</label>
+                      <input 
+                        type="password" 
+                        placeholder="••••••••" 
+                        required 
+                        className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl outline-none focus:bg-white focus:border-slack-active text-gray-800 font-bold placeholder:text-gray-300 transition-all" 
+                        value={password} 
+                        onChange={e => setPassword(e.target.value)} 
+                      />
+                    </div>
+
+                    <button 
+                      type="submit" 
+                      disabled={loading || dbStatus !== 'connected'}
+                      className="w-full bg-slack-purple text-white font-black py-5 rounded-2xl hover:bg-slack-purple-hover disabled:opacity-50 transition-all active:scale-[0.98] shadow-xl shadow-purple-900/20 flex items-center justify-center gap-2 mt-6 overflow-hidden relative group"
+                    >
+                      <span className="relative z-10">{loading ? 'Processing...' : (isLogin ? 'Sign In' : 'Create Account')}</span>
+                      {!loading && <ArrowRight size={18} className="relative z-10 group-hover:translate-x-1 transition-transform" />}
+                      <motion.div 
+                        className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform"
+                      />
+                    </button>
+                  </form>
+
+                  <div className="mt-8 pt-8 border-t border-gray-50">
+                    <button 
+                      type="button" 
+                      onClick={skipLogin}
+                      className="w-full text-gray-400 hover:text-slack-active font-black text-xs transition-colors py-2"
+                    >
+                      Continue with Guest Demo
+                    </button>
+                  </div>
+                </motion.div>
+              </AnimatePresence>
+            </div>
+
+            {/* DB Status Footer */}
+            <div className="mt-6 flex items-center justify-center gap-3">
+               <div className={`w-2 h-2 rounded-full ${dbStatus === 'connected' ? 'bg-emerald-500' : 'bg-rose-500 animate-pulse'}`} />
+               <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">
+                 System: {dbStatus === 'connected' ? 'Database Operational' : 'Connection Error'}
+               </span>
+            </div>
+          </motion.div>
         </div>
       </div>
     </div>
   );
 };
+

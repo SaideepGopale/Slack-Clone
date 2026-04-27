@@ -7,6 +7,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   register: (username: string, email: string, password: string) => Promise<void>;
   logout: () => void;
+  skipLogin: () => void;
   loading: boolean;
 }
 
@@ -21,18 +22,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const savedUser = localStorage.getItem('user');
-    if (savedUser && savedUser !== 'undefined' && savedUser !== 'null' && token) {
-      try {
-        setUser(JSON.parse(savedUser));
-      } catch (err) {
-        console.error('Failed to parse user from storage', err);
-        localStorage.removeItem('user');
-        localStorage.removeItem('token');
-        setToken(null);
-      }
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+    } else {
+      delete axios.defaults.headers.common['Authorization'];
     }
-    setLoading(false);
+  }, [token]);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      if (token && token !== 'guest-token') {
+        try {
+          const res = await axios.get('/api/auth/me');
+          setUser(res.data);
+          localStorage.setItem('user', JSON.stringify(res.data));
+        } catch (err) {
+          console.error('Session verification failed', err);
+          logout();
+        }
+      } else if (token === 'guest-token') {
+        const savedUser = localStorage.getItem('user');
+        if (savedUser) {
+          try {
+            setUser(JSON.parse(savedUser));
+          } catch {
+            logout();
+          }
+        }
+      } else {
+        setUser(null);
+      }
+      setLoading(false);
+    };
+    checkAuth();
   }, [token]);
 
   useEffect(() => {
@@ -74,8 +96,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(null);
   };
 
+  const skipLogin = () => {
+    const guestUser = { id: 'guest', username: 'Guest Explorer', email: 'guest@slick.demo' };
+    setUser(guestUser);
+    setToken('guest-token'); // Dummy token to bypass checks
+    localStorage.setItem('user', JSON.stringify(guestUser));
+    localStorage.setItem('token', 'guest-token');
+  };
+
   return (
-    <AuthContext.Provider value={{ user, token, login, register, logout, loading }}>
+    <AuthContext.Provider value={{ user, token, login, register, logout, skipLogin, loading }}>
       {children}
     </AuthContext.Provider>
   );

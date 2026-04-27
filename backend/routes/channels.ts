@@ -4,10 +4,23 @@ import { authenticate } from '../middleware/index.ts';
 
 const router = Router();
 
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, async (req: any, res, next) => {
   try { 
-    const channels = await prisma.channel.findMany();
+    const channels = await prisma.channel.findMany({
+      where: {
+        members: {
+          some: { userId: req.user.id }
+        }
+      }
+    });
     res.json(channels); 
+  } catch (err) { next(err); }
+});
+
+router.get('/all', authenticate, async (req, res, next) => {
+  try {
+    const channels = await prisma.channel.findMany();
+    res.json(channels);
   } catch (err) { next(err); }
 });
 
@@ -48,6 +61,51 @@ router.get('/:id/messages', authenticate, async (req, res, next) => {
       orderBy: { createdAt: 'asc' }
     });
     res.json(messages);
+  } catch (err) { next(err); }
+});
+
+router.get('/:id/search', authenticate, async (req, res, next) => {
+  try {
+    const { q } = req.query;
+    if (!q) return res.json([]);
+
+    const messages = await prisma.message.findMany({
+      where: {
+        channelId: req.params.id,
+        content: {
+          contains: q as string,
+          mode: 'insensitive'
+        }
+      },
+      include: {
+        sender: {
+          select: { username: true }
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50
+    });
+    res.json(messages);
+  } catch (err) { next(err); }
+});
+
+router.post('/:id/join', authenticate, async (req: any, res, next) => {
+  try {
+    const membership = await prisma.channelMember.upsert({
+      where: {
+        userId_channelId: {
+          userId: req.user.id,
+          channelId: req.params.id
+        }
+      },
+      update: {},
+      create: {
+        userId: req.user.id,
+        channelId: req.params.id,
+        role: 'member'
+      }
+    });
+    res.json(membership);
   } catch (err) { next(err); }
 });
 

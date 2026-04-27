@@ -40,6 +40,9 @@ model Message {
   channel   Channel  @relation(fields: [channelId], references: [id])
   senderId  String
   sender    User     @relation(fields: [senderId], references: [id])
+  parentId  String?
+  parent    Message?  @relation("Thread", fields: [parentId], references: [id])
+  replies   Message[] @relation("Thread")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

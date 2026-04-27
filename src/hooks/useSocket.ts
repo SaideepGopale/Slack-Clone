@@ -18,7 +18,19 @@ export const useSocket = (token: string | null) => {
     setSocket(newSocket);
 
     newSocket.on('connect_error', (err) => {
-      console.error('Socket connection error:', err.message);
+      console.warn('Socket connection error (expected in some dev states):', err.message);
+    });
+
+    newSocket.on('error', (err) => {
+      console.warn('Socket reported an error:', err);
+    });
+
+    newSocket.on('disconnect', (reason) => {
+      if (reason === 'io server disconnect') {
+        // the disconnection was initiated by the server, you need to reconnect manually
+        newSocket.connect();
+      }
+      console.log('Socket disconnected:', reason);
     });
 
     return () => {

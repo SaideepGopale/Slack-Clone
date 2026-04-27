@@ -11,6 +11,7 @@ export interface Channel {
 export interface Message {
   id: string;
   channelId: string;
+  senderId: string;
   sender: {
     username: string;
   };
@@ -18,5 +19,7 @@ export interface Message {
   fileUrl?: string;
   fileName?: string;
   fileType?: string;
+  parentId?: string;
+  parent?: Message;
   createdAt: string;
 }
