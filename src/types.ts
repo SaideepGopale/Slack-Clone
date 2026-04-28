@@ -6,6 +6,7 @@ export interface User {
 export interface Channel {
   id: string;
   name: string;
+  isDM?: boolean;
 }
 
 export interface Message {

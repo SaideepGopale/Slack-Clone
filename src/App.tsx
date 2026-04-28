@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import axios from 'axios';
+import { Zap } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useSocket } from './hooks/useSocket';
 import { Sidebar } from './components/sidebar/Sidebar';
@@ -7,6 +8,10 @@ import { ChatArea } from './components/chat/ChatArea';
 import { AuthForm } from './components/auth/AuthForm';
 import { Header } from './components/layout/Header';
 import { Directory } from './components/layout/Directory';
+import { DMsView } from './components/layout/DMsView';
+import { ActivityView } from './components/layout/ActivityView';
+import { HomeView } from './components/layout/HomeView';
+import { MoreView } from './components/layout/MoreView';
 import { Channel } from './types';
 
 function MainChat() {
@@ -14,18 +19,35 @@ function MainChat() {
   const socket = useSocket(token);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [currentChannel, setCurrentChannel] = useState<Channel | null>(null);
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const [onlineUsers, setOnlineUsers] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [activeView, setActiveView] = useState<'chat' | 'directory' | 'home' | 'dms' | 'activity' | 'more'>('chat');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  const fetchChannels = () => {
+  const fetchChannels = (onComplete?: (chans: Channel[]) => void) => {
     if (token) {
-      axios.get('/api/channels')
+      axios.get('/api/channels', { headers: { Authorization: `Bearer ${token}` } })
         .then(res => {
           setChannels(res.data);
-          if (res.data.length > 0 && !currentChannel) setCurrentChannel(res.data[0]);
+          if (res.data.length > 0 && !currentChannel) setCurrentChannel(res.data.find((c: any) => !c.isDM) || res.data[0]);
+          if (onComplete) onComplete(res.data);
         });
+    }
+  };
+
+  const onStartDM = async (userId: string) => {
+    try {
+      const res = await axios.post('/api/channels/dm', { targetUserId: userId }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      fetchChannels((updatedChans) => {
+        const found = updatedChans.find((c: any) => c.id === res.data.id);
+        setCurrentChannel(found || res.data);
+        setActiveView('chat');
+      });
+    } catch (err) {
+      console.error('Failed to start DM:', err);
     }
   };
 
@@ -43,12 +65,42 @@ function MainChat() {
     if (socket) {
       socket.on('channel:created', c => setChannels(p => [...p, c]));
       socket.on('user:online', u => setOnlineUsers(u));
+      
+      const handleNewMessage = (msg: any) => {
+        // If message is NOT from current user AND (view is not chat OR current channel is not the message channel)
+        if (msg.senderId !== user?.id) {
+          if (activeView !== 'chat' || (currentChannel && currentChannel.id !== msg.channelId)) {
+            setUnreadCounts(prev => ({
+              ...prev,
+              [msg.channelId]: (prev[msg.channelId] || 0) + 1
+            }));
+          }
+        }
+      };
+
+      socket.on('message:received', handleNewMessage);
+
       return () => {
         socket.off('channel:created');
         socket.off('user:online');
+        socket.off('message:received', handleNewMessage);
       };
     }
-  }, [socket]);
+  }, [socket, activeView, currentChannel, user]);
+
+  // Clear unreads when switching to a channel
+  useEffect(() => {
+    if (activeView === 'chat' && currentChannel) {
+      setUnreadCounts(prev => {
+        if (prev[currentChannel.id]) {
+          const next = { ...prev };
+          delete next[currentChannel.id];
+          return next;
+        }
+        return prev;
+      });
+    }
+  }, [activeView, currentChannel]);
 
   if (loading) {
     return (
@@ -65,18 +117,62 @@ function MainChat() {
   const renderContent = () => {
     switch (activeView) {
       case 'directory':
-        return <Directory onChannelJoined={fetchChannels} />;
+        return <Directory onChannelJoined={fetchChannels} onlineUsers={onlineUsers} onSelectUser={onStartDM} />;
+      case 'activity':
+        return (
+          <ActivityView 
+            onSelectChannel={(ch) => {
+              setCurrentChannel(ch);
+              setActiveView('chat');
+            }}
+            onViewChange={setActiveView}
+          />
+        );
+      case 'dms':
+        return (
+          <DMsView 
+            channels={channels} 
+            onlineUsers={onlineUsers} 
+            onSelectChannel={(ch) => {
+              setCurrentChannel(ch);
+              setActiveView('chat');
+            }} 
+            onViewChange={setActiveView}
+          />
+        );
       case 'chat':
         return currentChannel ? (
-          <ChatArea channel={currentChannel} socket={socket} />
+          <ChatArea channel={currentChannel} socket={socket} onlineUsers={onlineUsers} />
         ) : (
-          <div className="flex-1 flex items-center justify-center text-gray-400 font-medium">Select a channel to start chatting</div>
+          <div className="flex-1 flex items-center justify-center text-gray-400 font-medium">Select a channel or teammate to start chatting</div>
         );
+      case 'home':
+        return (
+          <HomeView 
+            channels={channels} 
+            onSelectChannel={(ch) => {
+              setCurrentChannel(ch);
+              setActiveView('chat');
+            }}
+            onViewChange={setActiveView}
+          />
+        );
+      case 'more':
+        return <MoreView onViewChange={setActiveView} />;
       default:
         return (
           <div className="flex-1 flex flex-col items-center justify-center text-center p-10">
+            <div className="w-20 h-20 bg-gray-50 rounded-[2rem] flex items-center justify-center text-gray-300 mb-6 shrink-0">
+              <Zap size={40} />
+            </div>
             <h2 className="text-2xl font-black text-gray-900 mb-2 capitalize tracking-tight">{activeView} view</h2>
-            <p className="text-gray-500 max-w-sm">This section is currently under development to match the full Slick experience.</p>
+            <p className="text-gray-500 max-w-sm font-medium">This view is currently being optimized for your workspace.</p>
+            <button 
+              onClick={() => setActiveView('chat')}
+              className="mt-8 px-8 py-3 bg-slack-purple text-white font-black rounded-xl hover:bg-slack-purple-hover transition-all active:scale-95 shadow-xl shadow-purple-900/10"
+            >
+              Return Home
+            </button>
           </div>
         );
     }
@@ -104,15 +200,19 @@ function MainChat() {
           <Sidebar 
             channels={channels} 
             currentChannel={currentChannel} 
+            unreadCounts={unreadCounts}
             onSelectChannel={(ch: any) => {
               setCurrentChannel(ch);
+              setActiveView('chat');
               setIsSidebarOpen(false);
             }} 
             onlineUsers={onlineUsers}
             allUsers={users}
             activeView={activeView}
-            onViewChange={(view: any) => {
+            onStartDM={onStartDM}
+            onViewChange={(view: any, newChannels?: Channel[]) => {
               setActiveView(view);
+              if (newChannels) setChannels(newChannels);
               setIsSidebarOpen(false);
             }}
           />

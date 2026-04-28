@@ -14,6 +14,7 @@ import multer from 'multer';
 import authRoutes from './backend/routes/auth.ts';
 import channelRoutes from './backend/routes/channels.ts';
 import userRoutes from './backend/routes/users.ts';
+import invitationRoutes from './backend/routes/invitations.ts';
 import { dbCheck, errorHandler } from './backend/middleware/index.ts';
 import { prisma } from './backend/lib/prisma.ts';
 
@@ -66,8 +67,14 @@ app.use('/api', dbCheck);
 app.use('/api/auth', authRoutes);
 app.use('/api/channels', channelRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/invitations', invitationRoutes);
 app.post('/api/upload', upload.single('file'), (req: any, res) => {
-  res.json({ url: `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`, name: req.file.originalname, type: req.file.mimetype });
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  res.json({ 
+    url: `/uploads/${req.file.filename}`, 
+    name: req.file.originalname, 
+    type: req.file.mimetype 
+  });
 });
 
 app.use(errorHandler);
@@ -81,11 +88,6 @@ io.use((socket, next) => {
     return next(new Error('Authentication Error: Missing Token'));
   }
 
-  if (token === 'guest-token') {
-    (socket as any).user = { id: 'guest', username: 'Guest Explorer', email: 'guest@slick.demo' };
-    return next();
-  }
-
   jwt.verify(token, JWT_SECRET, (err: any, decoded: any) => {
     if (err) {
       console.error(`Socket Auth: JWT verification failed for ${socket.id}:`, err.message);
@@ -96,12 +98,26 @@ io.use((socket, next) => {
   });
 });
 
-const onlineUsers = new Map();
+const onlineUsers = new Map<string, { id: string, username: string, email: string, sockets: Set<string> }>();
 
 io.on('connection', (socket) => {
   const user = (socket as any).user;
-  onlineUsers.set(socket.id, user);
-  io.emit('user:online', Array.from(onlineUsers.values()));
+  
+  if (user && user.id) {
+    const existing = onlineUsers.get(user.id);
+    if (existing) {
+      existing.sockets.add(socket.id);
+    } else {
+      onlineUsers.set(user.id, { 
+        ...user, 
+        sockets: new Set([socket.id]) 
+      });
+    }
+    
+    // Convert to array for emission, omitting sockets set
+    const emitUsers = Array.from(onlineUsers.values()).map(({ sockets, ...u }) => u);
+    io.emit('user:online', emitUsers);
+  }
 
   socket.on('channel:join', (chanId) => {
     socket.rooms.forEach(r => { if (r !== socket.id) socket.leave(r); });
@@ -164,9 +180,37 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('message:delete', async (data) => {
+    try {
+      const existing = await prisma.message.findUnique({
+        where: { id: data.id }
+      });
+      
+      if (!existing || existing.senderId !== user.id) {
+        return;
+      }
+
+      await prisma.message.delete({
+        where: { id: data.id }
+      });
+      io.to(existing.channelId).emit('message:deleted', data.id);
+    } catch (err) {
+      console.error('Failed to delete message:', err);
+    }
+  });
+
   socket.on('disconnect', () => {
-    onlineUsers.delete(socket.id);
-    io.emit('user:online', Array.from(onlineUsers.values()));
+    if (user && user.id) {
+      const existing = onlineUsers.get(user.id);
+      if (existing) {
+        existing.sockets.delete(socket.id);
+        if (existing.sockets.size === 0) {
+          onlineUsers.delete(user.id);
+        }
+      }
+      const emitUsers = Array.from(onlineUsers.values()).map(({ sockets, ...u }) => u);
+      io.emit('user:online', emitUsers);
+    }
   });
 });
 

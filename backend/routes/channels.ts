@@ -11,15 +11,107 @@ router.get('/', authenticate, async (req: any, res, next) => {
         members: {
           some: { userId: req.user.id }
         }
+      },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: { id: true, username: true }
+            }
+          }
+        }
       }
     });
-    res.json(channels); 
+
+    // Map channels to include dynamic naming for DMs
+    const mappedChannels = channels.map(chan => {
+      if (chan.isDM) {
+        const otherMember = chan.members.find(m => m.userId !== req.user.id);
+        return {
+          ...chan,
+          name: otherMember ? otherMember.user.username : 'Direct Message'
+        };
+      }
+      return chan;
+    });
+
+    res.json(mappedChannels); 
+  } catch (err) { next(err); }
+});
+
+router.post('/dm', authenticate, async (req: any, res, next) => {
+  try {
+    const { targetUserId } = req.body;
+    const currentUserId = req.user.id;
+
+    if (targetUserId === currentUserId) {
+      return res.status(400).json({ error: 'Cannot create DM with yourself' });
+    }
+
+    // Find existing DM
+    const existingDM = await prisma.channel.findFirst({
+      where: {
+        isDM: true,
+        AND: [
+          { members: { some: { userId: currentUserId } } },
+          { members: { some: { userId: targetUserId } } }
+        ]
+      },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: { id: true, username: true }
+            }
+          }
+        }
+      }
+    });
+
+    if (existingDM) {
+      const otherMember = existingDM.members.find(m => m.userId !== currentUserId);
+      return res.json({
+        ...existingDM,
+        name: otherMember ? otherMember.user.username : 'Direct Message'
+      });
+    }
+
+    // Create new DM
+    const newDM = await prisma.channel.create({
+      data: {
+        isDM: true,
+        createdBy: currentUserId,
+        members: {
+          create: [
+            { userId: currentUserId, role: 'member' },
+            { userId: targetUserId, role: 'member' }
+          ]
+        }
+      },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: { id: true, username: true }
+            }
+          }
+        }
+      }
+    });
+
+    const otherMember = newDM.members.find(m => m.userId !== currentUserId);
+    res.json({
+      ...newDM,
+      name: otherMember ? otherMember.user.username : 'Direct Message'
+    });
   } catch (err) { next(err); }
 });
 
 router.get('/all', authenticate, async (req, res, next) => {
   try {
-    const channels = await prisma.channel.findMany();
+    const channels = await prisma.channel.findMany({
+      where: { isDM: false }
+    });
     res.json(channels);
   } catch (err) { next(err); }
 });

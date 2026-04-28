@@ -16,11 +16,6 @@ export const authenticate = (req: any, res: Response, next: NextFunction) => {
     return res.status(401).json({ error: 'Unauthorized: Missing or invalid token' });
   }
 
-  if (token === 'guest-token') {
-    req.user = { id: 'guest', username: 'Guest Explorer', email: 'guest@slick.demo' };
-    return next();
-  }
-
   jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
     if (err) {
       console.error('JWT Auth Error:', err.message);

@@ -7,7 +7,6 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   register: (username: string, email: string, password: string) => Promise<void>;
   logout: () => void;
-  skipLogin: () => void;
   loading: boolean;
 }
 
@@ -17,7 +16,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<any>(null);
   const [token, setToken] = useState<string | null>(() => {
     const t = localStorage.getItem('token');
-    return (t === 'null' || t === 'undefined') ? null : t;
+    const validToken = (t === 'null' || t === 'undefined') ? null : t;
+    if (validToken) {
+      axios.defaults.headers.common['Authorization'] = `Bearer ${validToken}`;
+    }
+    return validToken;
   });
   const [loading, setLoading] = useState(true);
 
@@ -31,7 +34,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const checkAuth = async () => {
-      if (token && token !== 'guest-token') {
+      if (token) {
         try {
           const res = await axios.get('/api/auth/me');
           setUser(res.data);
@@ -39,15 +42,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (err) {
           console.error('Session verification failed', err);
           logout();
-        }
-      } else if (token === 'guest-token') {
-        const savedUser = localStorage.getItem('user');
-        if (savedUser) {
-          try {
-            setUser(JSON.parse(savedUser));
-          } catch {
-            logout();
-          }
         }
       } else {
         setUser(null);
@@ -73,39 +67,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const login = async (email: string, password: string) => {
     const res = await axios.post('/api/auth/login', { email, password });
-    const { token, user } = res.data;
-    localStorage.setItem('token', token);
-    localStorage.setItem('user', JSON.stringify(user));
-    setToken(token);
-    setUser(user);
+    const { token: newToken, user: newUser } = res.data;
+    localStorage.setItem('token', newToken);
+    localStorage.setItem('user', JSON.stringify(newUser));
+    axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+    setToken(newToken);
+    setUser(newUser);
   };
 
   const register = async (username: string, email: string, password: string) => {
     const res = await axios.post('/api/auth/register', { username, email, password });
-    const { token, user } = res.data;
-    localStorage.setItem('token', token);
-    localStorage.setItem('user', JSON.stringify(user));
-    setToken(token);
-    setUser(user);
+    const { token: newToken, user: newUser } = res.data;
+    localStorage.setItem('token', newToken);
+    localStorage.setItem('user', JSON.stringify(newUser));
+    axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
+    setToken(newToken);
+    setUser(newUser);
   };
 
   const logout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    delete axios.defaults.headers.common['Authorization'];
     setToken(null);
     setUser(null);
   };
 
-  const skipLogin = () => {
-    const guestUser = { id: 'guest', username: 'Guest Explorer', email: 'guest@slick.demo' };
-    setUser(guestUser);
-    setToken('guest-token'); // Dummy token to bypass checks
-    localStorage.setItem('user', JSON.stringify(guestUser));
-    localStorage.setItem('token', 'guest-token');
-  };
-
   return (
-    <AuthContext.Provider value={{ user, token, login, register, logout, skipLogin, loading }}>
+    <AuthContext.Provider value={{ user, token, login, register, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );

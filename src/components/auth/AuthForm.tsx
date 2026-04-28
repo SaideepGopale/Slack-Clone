@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Circle, ArrowRight, UserPlus, LogIn, ShieldCheck, Zap } from 'lucide-react';
 
 export const AuthForm = () => {
-  const { login, register, skipLogin } = useAuth();
+  const { login, register } = useAuth();
   const [isLogin, setIsLogin] = useState(true);
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -226,13 +226,9 @@ export const AuthForm = () => {
                   </form>
 
                   <div className="mt-8 pt-8 border-t border-gray-50">
-                    <button 
-                      type="button" 
-                      onClick={skipLogin}
-                      className="w-full text-gray-400 hover:text-slack-active font-black text-xs transition-colors py-2"
-                    >
-                      Continue with Guest Demo
-                    </button>
+                    <p className="text-gray-400 font-bold text-[10px] uppercase tracking-widest text-center">
+                      Protected by JWT Architecture
+                    </p>
                   </div>
                 </motion.div>
               </AnimatePresence>
