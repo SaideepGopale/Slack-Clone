@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { Zap } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ResetPassword } from './components/auth/ResetPassword';
 import { useSocket } from './hooks/useSocket';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { ChatArea } from './components/chat/ChatArea';
@@ -111,6 +112,11 @@ function MainChat() {
 
   if (!user) return <AuthForm />;
   if (!socket) return <div className="h-screen flex items-center justify-center font-bold text-slate-400">Initialising real-time...</div>;
+
+  // Check for reset-password path and render the reset page regardless of auth
+  if (typeof window !== 'undefined' && window.location.pathname === '/reset-password') {
+    return <ResetPassword />;
+  }
 
   const renderContent = () => {
     switch (activeView) {

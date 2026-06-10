@@ -10,10 +10,16 @@ import {
   LogIn,
   ShieldCheck,
   Zap,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 
 export const AuthForm = () => {
-  const { login, register } = useAuth();
+  const {
+    login,
+    register,
+    forgotPassword,
+  } = useAuth();
 
   const [isLogin, setIsLogin] =
     useState(true);
@@ -26,6 +32,9 @@ export const AuthForm = () => {
 
   const [password, setPassword] =
     useState('');
+
+  const [showPassword, setShowPassword] =
+    useState(false);
 
   const [error, setError] =
     useState('');
@@ -68,9 +77,8 @@ export const AuthForm = () => {
           setDbStatus('error');
 
           setError(
-            `Database connection failed: ${
-              res.data.details ||
-              'Check your credentials.'
+            `Database connection failed: ${res.data.details ||
+            'Check your credentials.'
             }`
           );
         }
@@ -132,7 +140,32 @@ export const AuthForm = () => {
     } catch (err: any) {
       setError(
         err.response?.data?.error ||
-          'Authentication failed.'
+        'Authentication failed.'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (!email.trim()) {
+      setError('Please enter your email address first.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError('');
+
+      await forgotPassword(email);
+
+      alert(
+        'Password reset link has been sent to your email.'
+      );
+    } catch (err: any) {
+      setError(
+        err.response?.data?.error ||
+        'Failed to send reset email.'
       );
     } finally {
       setLoading(false);
@@ -308,11 +341,10 @@ export const AuthForm = () => {
                   onClick={() =>
                     setIsLogin(true)
                   }
-                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-black text-sm transition-all ${
-                    isLogin
-                      ? 'bg-white shadow-md text-gray-900'
-                      : 'text-gray-400 hover:text-gray-600'
-                  }`}
+                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-black text-sm transition-all ${isLogin
+                    ? 'bg-white shadow-md text-gray-900'
+                    : 'text-gray-400 hover:text-gray-600'
+                    }`}
                 >
                   <LogIn size={16} />
                   Login
@@ -322,11 +354,10 @@ export const AuthForm = () => {
                   onClick={() =>
                     setIsLogin(false)
                   }
-                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-black text-sm transition-all ${
-                    !isLogin
-                      ? 'bg-white shadow-md text-gray-900'
-                      : 'text-gray-400 hover:text-gray-600'
-                  }`}
+                  className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-black text-sm transition-all ${!isLogin
+                    ? 'bg-white shadow-md text-gray-900'
+                    : 'text-gray-400 hover:text-gray-600'
+                    }`}
                 >
                   <UserPlus size={16} />
                   Sign Up
@@ -467,19 +498,53 @@ export const AuthForm = () => {
                         Secret Password
                       </label>
 
-                      <input
-                        type="password"
-                        required
-                        value={password}
-                        onChange={(e) =>
-                          setPassword(
-                            e.target
-                              .value
-                          )
-                        }
-                        placeholder="••••••••"
-                        className="w-full p-4 bg-gray-50 border-2 border-transparent rounded-2xl outline-none focus:bg-white focus:border-slack-active text-gray-800 font-bold placeholder:text-gray-300 transition-all"
-                      />
+                      <div className="relative">
+                        <input
+                          type={
+                            showPassword
+                              ? 'text'
+                              : 'password'
+                          }
+                          required
+                          value={password}
+                          onChange={(e) =>
+                            setPassword(
+                              e.target.value
+                            )
+                          }
+                          placeholder="••••••••"
+                          className="w-full p-4 pr-14 bg-gray-50 border-2 border-transparent rounded-2xl outline-none focus:bg-white focus:border-slack-active text-gray-800 font-bold placeholder:text-gray-300 transition-all"
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowPassword(
+                              !showPassword
+                            )
+                          }
+                          className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700"
+                        >
+                          {showPassword ? (
+                            <EyeOff size={20} />
+                          ) : (
+                            <Eye size={20} />
+                          )}
+                        </button>
+                      </div>
+
+                      {isLogin && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={handleForgotPassword}
+                            disabled={loading}
+                            className="text-sm font-semibold text-slack-purple hover:underline disabled:opacity-50"
+                          >
+                            Forgot Password?
+                          </button>
+                        </div>
+                      )}
 
                     </div>
 
@@ -490,7 +555,7 @@ export const AuthForm = () => {
                       disabled={
                         loading ||
                         dbStatus !==
-                          'connected'
+                        'connected'
                       }
                       className="w-full bg-slack-purple text-white font-black py-5 rounded-2xl hover:bg-slack-purple-hover disabled:opacity-50 transition-all active:scale-[0.98] shadow-xl shadow-purple-900/20 flex items-center justify-center gap-2 mt-6 overflow-hidden relative group"
                     >
@@ -500,8 +565,8 @@ export const AuthForm = () => {
                         {loading
                           ? 'Processing...'
                           : isLogin
-                          ? 'Sign In'
-                          : 'Create Account'}
+                            ? 'Sign In'
+                            : 'Create Account'}
 
                       </span>
 
@@ -541,19 +606,18 @@ export const AuthForm = () => {
             <div className="mt-6 flex items-center justify-center gap-3 pb-10">
 
               <div
-                className={`w-2 h-2 rounded-full ${
-                  dbStatus ===
+                className={`w-2 h-2 rounded-full ${dbStatus ===
                   'connected'
-                    ? 'bg-emerald-500'
-                    : 'bg-rose-500 animate-pulse'
-                }`}
+                  ? 'bg-emerald-500'
+                  : 'bg-rose-500 animate-pulse'
+                  }`}
               />
 
               <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400">
 
                 System:{' '}
                 {dbStatus ===
-                'connected'
+                  'connected'
                   ? 'Database Operational'
                   : 'Connection Error'}
 
