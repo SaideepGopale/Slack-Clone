@@ -24,8 +24,14 @@ router.post('/', async (req: AuthenticatedRequest, res, next) => {
   try {
     const { email } = req.body;
 
-    if (!email) {
-      return res.status(400).json({ success: false, message: 'Email required' });
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ success: false, message: 'Valid email required' });
+    }
+
+    // Basic email validation
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ success: false, message: 'Invalid email format' });
     }
 
     // Create invitation record in DB
@@ -41,13 +47,65 @@ router.post('/', async (req: AuthenticatedRequest, res, next) => {
     const inviteLink = `${appUrl}/join/${invitation.token}`;
 
     // Send email
-    await sendInviteEmail(email, inviteLink);
+    try {
+      await sendInviteEmail(email, inviteLink);
+    } catch (emailErr: any) {
+      console.error('Email sending failed:', emailErr.message);
+      // Still return success but note that email wasn't sent
+      return res.status(201).json({
+        success: true,
+        message: 'Invitation created but email failed to send',
+        token: invitation.token,
+        id: invitation.id,
+        emailError: emailErr.message,
+      });
+    }
 
     res.status(201).json({
       success: true,
       message: 'Invite sent successfully',
       token: invitation.token,
       id: invitation.id,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Accept an invitation via token
+router.post('/accept/:token', async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const { token } = req.params;
+
+    if (!token) {
+      return res.status(400).json({ success: false, message: 'Invalid invitation token' });
+    }
+
+    // Find invitation by token
+    const invitation = await prisma.invitation.findUnique({
+      where: { token },
+      include: { inviter: { select: { username: true, email: true } } },
+    });
+
+    if (!invitation) {
+      return res.status(404).json({ success: false, message: 'Invitation not found or expired' });
+    }
+
+    if (invitation.status === 'accepted') {
+      return res.status(400).json({ success: false, message: 'This invitation has already been accepted' });
+    }
+
+    // Mark invitation as accepted
+    await prisma.invitation.update({
+      where: { token },
+      data: { status: 'accepted' },
+    });
+
+    res.json({
+      success: true,
+      message: 'Invitation accepted successfully',
+      inviterId: invitation.inviterId,
+      inviter: invitation.inviter,
     });
   } catch (err) {
     next(err);

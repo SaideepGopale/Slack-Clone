@@ -1,11 +1,4 @@
-import React, {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import { User } from '../types';
 

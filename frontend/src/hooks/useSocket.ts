@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 
 export const useSocket = (token: string | null) => {
@@ -7,12 +7,13 @@ export const useSocket = (token: string | null) => {
   useEffect(() => {
     if (!token) return;
 
-    const newSocket = io({
+    const backendUrl = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:4000';
+    const newSocket = io(backendUrl, {
       auth: { token },
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: 5,
-      reconnectionDelay: 1000
+      reconnectionDelay: 1000,
     });
 
     setSocket(newSocket);
