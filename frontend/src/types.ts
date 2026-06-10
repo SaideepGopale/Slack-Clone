@@ -15,6 +15,7 @@ export interface Message {
   channelId: string;
   senderId: string;
   sender: {
+    id: string;
     username: string;
   };
   content?: string;
