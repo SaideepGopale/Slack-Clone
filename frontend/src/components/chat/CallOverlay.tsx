@@ -1,8 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
 import {
-  Mic, MicOff, Video, VideoOff, MonitorUp, PhoneOff,
-  Phone, PhoneIncoming, Monitor,
+    Mic, MicOff,
+    Monitor,
+    MonitorUp,
+    Phone, PhoneIncoming,
+    PhoneOff,
+    Video, VideoOff,
 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
 
 interface CallOverlayProps {
   callType: 'audio' | 'video';
@@ -10,8 +14,8 @@ interface CallOverlayProps {
   isVideoOff: boolean;
   isSharingScreen: boolean;
   callerName?: string;
-  localVideoRef: React.RefObject<HTMLVideoElement>;
-  remoteVideoRef: React.RefObject<HTMLVideoElement>;
+  localVideoRef: React.RefObject<HTMLVideoElement | null>;
+  remoteVideoRef: React.RefObject<HTMLVideoElement | null>;
   onToggleMute: () => void;
   onToggleVideo: () => void;
   onScreenShare: () => void;

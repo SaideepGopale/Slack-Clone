@@ -1,14 +1,27 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Socket } from 'socket.io-client';
-import {
-  Send, Plus, Smile, AtSign, Bold, Italic, Underline, Strikethrough,
-  List, ListOrdered, Code2, Quote, Reply, Pencil, Trash2, Download, X,
-  Phone, Video,
-} from 'lucide-react';
 import axios from 'axios';
 import { format } from 'date-fns';
 import EmojiPicker from 'emoji-picker-react';
-import { Channel, User, Message } from '../../types';
+import {
+    AtSign, Bold,
+    Code2,
+    Download,
+    Italic,
+    List, ListOrdered,
+    Pencil,
+    Phone,
+    Plus,
+    Quote, Reply,
+    Send,
+    Smile,
+    Strikethrough,
+    Trash2,
+    Underline,
+    Video,
+    X,
+} from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Socket } from 'socket.io-client';
+import { Channel, Message, User } from '../../types';
 import { CallOverlay, IncomingCallBanner } from './CallOverlay';
 
 interface Reaction { emoji: string; count: number; }
@@ -58,6 +71,8 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
   const [fileData, setFileData] = useState<FileData | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -237,11 +252,15 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
         const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         const screenTrack = screenStream.getVideoTracks()[0];
 
-        // Find the video sender
-        const sender = peerConnection.current.getSenders().find(s => s.track?.kind === 'video');
-        if (!sender) return;
+        // Find the video sender; if none exists yet (audio-only call), add one.
+        let sender = peerConnection.current.getSenders().find(s => s.track?.kind === 'video');
+        if (!sender) {
+          sender = peerConnection.current.addTrack(screenTrack, screenStream);
+        } else {
+          await sender.replaceTrack(screenTrack);
+        }
+
         screenSenderRef.current = sender;
-        await sender.replaceTrack(screenTrack);
         if (localVideoRef.current) localVideoRef.current.srcObject = screenStream;
         setIsSharingScreen(true);
 
@@ -274,26 +293,39 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
         const res = await axios.get<ChatMessage[]>(`/api/channels/${channel.id}/messages`);
         setMessages(res.data.map(m => ({ ...m, reactions: m.reactions ?? [] })));
         socket.emit('channel:join', channel.id);
-      } catch (err) { console.error('fetchMessages error:', err); }
+      } catch (err) { 
+        console.error('fetchMessages error:', err);
+        setError('Failed to load messages');
+      }
     };
     fetchMessages();
 
     const handleMessage = (message: ChatMessage) => {
       setMessages(prev => {
-        if (prev.find(m => m.id === message.id)) return prev;
-        return [...prev, { ...message, reactions: message.reactions ?? [] }];
+        // Remove optimistic message if it exists
+        const filtered = prev.filter(m => !m.id.startsWith('temp-'));
+        if (filtered.find(m => m.id === message.id)) return filtered;
+        return [...filtered, { ...message, reactions: message.reactions ?? [] }];
       });
     };
     const handleUpdate = (updated: ChatMessage) => setMessages(prev => prev.map(m => m.id === updated.id ? updated : m));
     const handleDelete = (id: string) => setMessages(prev => prev.filter(m => m.id !== id));
+    const handleError = (data: { error: string }) => {
+      console.error('Socket error:', data.error);
+      setError(data.error);
+      setMessages(prev => prev.filter(m => !m.id.startsWith('temp-')));
+      setTimeout(() => setError(null), 5000);
+    };
 
     socket.on('message:received', handleMessage);
     socket.on('message:updated', handleUpdate);
     socket.on('message:deleted', handleDelete);
+    socket.on('message:error', handleError);
     return () => {
       socket.off('message:received', handleMessage);
       socket.off('message:updated', handleUpdate);
       socket.off('message:deleted', handleDelete);
+      socket.off('message:error', handleError);
     };
   }, [channel, socket]);
 
@@ -301,32 +333,104 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // ── Formatting ────────────────────────────────────────────────────────────
+// ── Toolbar Button Component ──────────────────────────────────────────────
+interface ToolbarButtonProps {
+  icon: React.ReactNode;
+  tooltip: string;
+  onClick: () => void;
+  ariaLabel: string;
+}
+
+const ToolbarButton: React.FC<ToolbarButtonProps> = ({ icon, tooltip, onClick, ariaLabel }) => {
+  const [showTooltip, setShowTooltip] = React.useState(false);
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onClick();
+        }}
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => setShowTooltip(false)}
+        className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 active:bg-gray-200 rounded-md transition-all duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+        aria-label={ariaLabel}
+      >
+        {icon}
+      </button>
+      {showTooltip && (
+        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded-md whitespace-nowrap z-50 pointer-events-none animate-fade-in">
+          {tooltip}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Toolbar Separator ─────────────────────────────────────────────────────
+const ToolbarSeparator: React.FC = () => (
+  <div className="w-px h-6 bg-gray-200 mx-1" role="separator" aria-orientation="vertical" />
+);
+
+// ── Formatting ────────────────────────────────────────────────────────────
   const applyFormat = (prefix: string, suffix: string = prefix) => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
-    const selected = content.substring(start, end);
-    setContent(content.substring(0, start) + prefix + selected + suffix + content.substring(end));
-    setTimeout(() => {
-      textarea.focus();
-      textarea.selectionStart = start + prefix.length;
-      textarea.selectionEnd = end + prefix.length;
-    }, 0);
+
+    setContent((currentContent) => {
+      const selected = currentContent.substring(start, end);
+      const next = currentContent.substring(0, start) + prefix + selected + suffix + currentContent.substring(end);
+      setTimeout(() => {
+        textarea.focus();
+        textarea.selectionStart = start + prefix.length;
+        textarea.selectionEnd = end + prefix.length;
+      }, 0);
+      return next;
+    });
   };
 
   // ── Send / Edit / Delete / Reactions ─────────────────────────────────────
   const handleSend = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!content.trim() && !fileData) return;
+    
+    setSending(true);
+    setError(null);
+    
+    // Create optimistic message
+    const optimisticMessage: ChatMessage = {
+      id: `temp-${Date.now()}`,
+      channelId: channel.id,
+      senderId: '',
+      sender: { id: '', username: 'You' },
+      content: content,
+      fileUrl: fileData?.url,
+      fileName: fileData?.name,
+      fileType: fileData?.type,
+      parentId: replyTo?.id,
+      createdAt: new Date().toISOString(),
+      reactions: [],
+    };
+    
+    // Add optimistic message to UI
+    setMessages(prev => [...prev, optimisticMessage]);
+    
+    // Send via socket
     socket.emit('message:send', {
       channelId: channel.id, content,
       fileUrl: fileData?.url, fileName: fileData?.name, fileType: fileData?.type,
       parentId: replyTo?.id,
     });
-    setContent(''); setReplyTo(null); setFileData(null);
-    setShowEmojiPicker(false); setShowMentionBox(false);
+    
+    setContent(''); 
+    setReplyTo(null); 
+    setFileData(null);
+    setShowEmojiPicker(false); 
+    setShowMentionBox(false);
+    setSending(false);
   };
 
   const handleEdit = () => {
@@ -352,16 +456,29 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    
+    // Check file size (10MB limit)
+    if (file.size > 10 * 1024 * 1024) {
+      setError('File size must be less than 10MB');
+      setTimeout(() => setError(null), 5000);
+      return;
+    }
+    
     const formData = new FormData();
     formData.append('file', file);
     try {
       setUploading(true);
       const res = await axios.post<FileData>('/api/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (pe) => setUploadProgress(Math.round((pe.loaded * 100) / (pe.total ?? 1))),
       });
       setFileData(res.data);
-    } catch (err) { console.error('Upload error:', err); }
+      setError(null);
+    } catch (err: any) { 
+      console.error('Upload error:', err);
+      const errorMessage = err.response?.data?.error || 'File upload failed. Please try again.';
+      setError(errorMessage);
+      setTimeout(() => setError(null), 5000);
+    }
     finally { setUploading(false); setUploadProgress(0); }
   };
 
@@ -372,15 +489,22 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
 
   if (!channel) return null;
 
-  const formatButtons = [
-    { icon: <Bold size={18} />, action: () => applyFormat('**') },
-    { icon: <Italic size={18} />, action: () => applyFormat('*') },
-    { icon: <Underline size={18} />, action: () => applyFormat('<u>', '</u>') },
-    { icon: <Strikethrough size={18} />, action: () => applyFormat('~~') },
-    { icon: <List size={18} />, action: () => applyFormat('\n• ') },
-    { icon: <ListOrdered size={18} />, action: () => applyFormat('\n1. ') },
-    { icon: <Code2 size={18} />, action: () => applyFormat('`') },
-    { icon: <Quote size={18} />, action: () => applyFormat('\n> ') },
+  // Toolbar button groups with metadata
+  const textFormattingGroup = [
+    { icon: <Bold size={18} />, action: () => applyFormat('**'), label: 'Bold', tooltip: 'Bold (Cmd+B)' },
+    { icon: <Italic size={18} />, action: () => applyFormat('*'), label: 'Italic', tooltip: 'Italic (Cmd+I)' },
+    { icon: <Underline size={18} />, action: () => applyFormat('<u>', '</u>'), label: 'Underline', tooltip: 'Underline (Cmd+U)' },
+    { icon: <Strikethrough size={18} />, action: () => applyFormat('~~'), label: 'Strikethrough', tooltip: 'Strikethrough' },
+  ];
+
+  const listGroup = [
+    { icon: <List size={18} />, action: () => applyFormat('\n• '), label: 'Bullet List', tooltip: 'Bullet List' },
+    { icon: <ListOrdered size={18} />, action: () => applyFormat('\n1. '), label: 'Numbered List', tooltip: 'Numbered List' },
+  ];
+
+  const blockGroup = [
+    { icon: <Code2 size={18} />, action: () => applyFormat('`'), label: 'Code', tooltip: 'Inline Code' },
+    { icon: <Quote size={18} />, action: () => applyFormat('\n> '), label: 'Quote', tooltip: 'Block Quote' },
   ];
 
   return (
@@ -498,19 +622,63 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
 
       {/* ── Input area ── */}
       <div className="border-t border-gray-200 bg-white p-4 relative shrink-0">
+        {error && (
+          <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-2xl text-red-700 text-sm flex items-center justify-between">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} aria-label="Dismiss error" className="text-red-500 hover:text-red-700">
+              <X size={18} />
+            </button>
+          </div>
+        )}
         {replyTo && (
           <div className="mb-3 bg-gray-50 border border-gray-200 rounded-2xl p-3 flex items-center justify-between">
             <span className="text-sm text-gray-700">Replying to <b>{replyTo.sender?.username}</b></span>
             <button onClick={() => setReplyTo(null)} aria-label="Cancel reply"><X size={18} /></button>
           </div>
         )}
-        <div className="flex items-center gap-1 border border-gray-200 rounded-t-2xl px-3 py-2 bg-white flex-wrap">
-          {formatButtons.map((item, index) => (
-            <button key={index} type="button" onMouseDown={e => { e.preventDefault(); item.action(); }}
-              className="p-2 hover:bg-gray-100 rounded-lg transition">
-              {item.icon}
-            </button>
-          ))}
+        <div className="flex items-center gap-0.5 border border-gray-200 rounded-t-2xl px-2 py-2 bg-gradient-to-b from-gray-50 to-white flex-wrap">
+          {/* Text Formatting Group */}
+          <div className="flex items-center gap-0.5">
+            {textFormattingGroup.map((item, index) => (
+              <ToolbarButton
+                key={index}
+                icon={item.icon}
+                tooltip={item.tooltip}
+                onClick={item.action}
+                ariaLabel={item.label}
+              />
+            ))}
+          </div>
+
+          <ToolbarSeparator />
+
+          {/* List Group */}
+          <div className="flex items-center gap-0.5">
+            {listGroup.map((item, index) => (
+              <ToolbarButton
+                key={index}
+                icon={item.icon}
+                tooltip={item.tooltip}
+                onClick={item.action}
+                ariaLabel={item.label}
+              />
+            ))}
+          </div>
+
+          <ToolbarSeparator />
+
+          {/* Block Group */}
+          <div className="flex items-center gap-0.5">
+            {blockGroup.map((item, index) => (
+              <ToolbarButton
+                key={index}
+                icon={item.icon}
+                tooltip={item.tooltip}
+                onClick={item.action}
+                ariaLabel={item.label}
+              />
+            ))}
+          </div>
         </div>
         <textarea
           ref={textareaRef} rows={4} value={content}
@@ -559,14 +727,14 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
         )}
         <div className="flex items-center justify-between mt-2">
           <div className="flex items-center gap-2">
-            <input type="file" hidden ref={fileInputRef} onChange={handleFileSelect} />
+            <input type="file" hidden ref={fileInputRef} onChange={handleFileSelect} accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.txt,.zip,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.json,.csv,.svg" />
             <button onClick={() => fileInputRef.current?.click()} className="p-3 hover:bg-gray-100 rounded-full transition" aria-label="Attach file"><Plus size={20} /></button>
             <button onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-3 hover:bg-gray-100 rounded-full transition" aria-label="Emoji picker"><Smile size={20} /></button>
             <button onClick={() => setShowMentionBox(!showMentionBox)} className="p-3 hover:bg-gray-100 rounded-full transition" aria-label="Mention someone"><AtSign size={20} /></button>
           </div>
-          <button onClick={handleSend} disabled={!content.trim() && !fileData}
-            className={`px-5 py-3 rounded-2xl flex items-center gap-2 font-medium transition ${content.trim() || fileData ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-100 text-gray-400'}`}>
-            <Send size={18} />Send
+          <button onClick={handleSend} disabled={(!content.trim() && !fileData) || sending || uploading}
+            className={`px-5 py-3 rounded-2xl flex items-center gap-2 font-medium transition ${(content.trim() || fileData) && !sending && !uploading ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-100 text-gray-400'}`}>
+            <Send size={18} />{sending ? 'Sending...' : 'Send'}
           </button>
         </div>
         <p className="text-center text-xs text-gray-400 mt-1">Press Enter to send · Shift + Enter for new line</p>
