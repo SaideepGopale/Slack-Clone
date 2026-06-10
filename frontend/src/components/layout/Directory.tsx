@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Search, UserPlus, Filter, Grid, List as ListIcon, MoreHorizontal, Mail, ChevronRight, Share2, Hash, ExternalLink, Users, AlertCircle, Clock } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
 import axios from 'axios';
+import { AlertCircle, Clock, Filter, Grid, Hash, List as ListIcon, Mail, MoreHorizontal, Search, Share2, UserPlus, Users } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import emailjs from '@emailjs/browser';
 
 const tabs = ['People', 'Channels', 'User Groups', 'External', 'Invitations'];
 
@@ -112,40 +111,31 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
 
   const handleInvite = async (email: string) => {
     try {
-      // Save invitation in backend
+      if (!email.trim()) {
+        alert('Please enter an email address');
+        return;
+      }
+
+      // Save invitation in backend (the backend will securely send the email)
       const response = await axios.post('/api/invitations', { email });
-
-      // Create join link
-      const joinLink = `${window.location.origin}/join/${response.data?.token ?? 'demo-token'}`;
-
-      // EmailJS params
-      const templateParams = {
-        to_email: email,
-        name: email,
-        invite_link: joinLink,
-        app_name: 'Slack',
-      };
-
-      // Send Email via EmailJS — credentials come from VITE_ env vars
-      const emailResponse = await emailjs.send(
-        import.meta.env.VITE_EMAILJS_SERVICE_ID,
-        import.meta.env.VITE_EMAILJS_TEMPLATE_ID,
-        templateParams,
-        import.meta.env.VITE_EMAILJS_PUBLIC_KEY
-      );
 
       // Refresh invitation list
       await fetchData();
 
-      alert('Invite sent successfully!');
-    } catch (err: any) {
-      if (err?.text) {
-        alert(err.text);
-      } else if (err?.message) {
-        alert(err.message);
+      // Check for email warning
+      if (response.data?.emailError) {
+        alert(`Invitation created, but email failed to send: ${response.data.emailError}\n\nShare the invite link with them instead.`);
       } else {
-        alert('Failed to send invitation');
+        alert('Invite sent successfully!');
       }
+    } catch (err: any) {
+      const errorMessage = 
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        'Failed to send invitation';
+      alert(errorMessage);
+      console.error('Invite error:', err);
     }
   };
 

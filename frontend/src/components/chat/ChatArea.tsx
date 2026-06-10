@@ -1,14 +1,27 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Socket } from 'socket.io-client';
-import {
-  Send, Plus, Smile, AtSign, Bold, Italic, Underline, Strikethrough,
-  List, ListOrdered, Code2, Quote, Reply, Pencil, Trash2, Download, X,
-  Phone, Video,
-} from 'lucide-react';
 import axios from 'axios';
 import { format } from 'date-fns';
 import EmojiPicker from 'emoji-picker-react';
-import { Channel, User, Message } from '../../types';
+import {
+    AtSign, Bold,
+    Code2,
+    Download,
+    Italic,
+    List, ListOrdered,
+    Pencil,
+    Phone,
+    Plus,
+    Quote, Reply,
+    Send,
+    Smile,
+    Strikethrough,
+    Trash2,
+    Underline,
+    Video,
+    X,
+} from 'lucide-react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Socket } from 'socket.io-client';
+import { Channel, Message, User } from '../../types';
 import { CallOverlay, IncomingCallBanner } from './CallOverlay';
 
 interface Reaction { emoji: string; count: number; }
@@ -237,11 +250,15 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
         const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
         const screenTrack = screenStream.getVideoTracks()[0];
 
-        // Find the video sender
-        const sender = peerConnection.current.getSenders().find(s => s.track?.kind === 'video');
-        if (!sender) return;
+        // Find the video sender; if none exists yet (audio-only call), add one.
+        let sender = peerConnection.current.getSenders().find(s => s.track?.kind === 'video');
+        if (!sender) {
+          sender = peerConnection.current.addTrack(screenTrack, screenStream);
+        } else {
+          await sender.replaceTrack(screenTrack);
+        }
+
         screenSenderRef.current = sender;
-        await sender.replaceTrack(screenTrack);
         if (localVideoRef.current) localVideoRef.current.srcObject = screenStream;
         setIsSharingScreen(true);
 
@@ -301,19 +318,63 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // ── Formatting ────────────────────────────────────────────────────────────
+// ── Toolbar Button Component ──────────────────────────────────────────────
+interface ToolbarButtonProps {
+  icon: React.ReactNode;
+  tooltip: string;
+  onClick: () => void;
+  ariaLabel: string;
+}
+
+const ToolbarButton: React.FC<ToolbarButtonProps> = ({ icon, tooltip, onClick, ariaLabel }) => {
+  const [showTooltip, setShowTooltip] = React.useState(false);
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onClick();
+        }}
+        onMouseEnter={() => setShowTooltip(true)}
+        onMouseLeave={() => setShowTooltip(false)}
+        className="p-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 active:bg-gray-200 rounded-md transition-all duration-150 ease-in-out focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+        aria-label={ariaLabel}
+      >
+        {icon}
+      </button>
+      {showTooltip && (
+        <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded-md whitespace-nowrap z-50 pointer-events-none animate-fade-in">
+          {tooltip}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ── Toolbar Separator ─────────────────────────────────────────────────────
+const ToolbarSeparator: React.FC = () => (
+  <div className="w-px h-6 bg-gray-200 mx-1" role="separator" aria-orientation="vertical" />
+);
+
+// ── Formatting ────────────────────────────────────────────────────────────
   const applyFormat = (prefix: string, suffix: string = prefix) => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
-    const selected = content.substring(start, end);
-    setContent(content.substring(0, start) + prefix + selected + suffix + content.substring(end));
-    setTimeout(() => {
-      textarea.focus();
-      textarea.selectionStart = start + prefix.length;
-      textarea.selectionEnd = end + prefix.length;
-    }, 0);
+
+    setContent((currentContent) => {
+      const selected = currentContent.substring(start, end);
+      const next = currentContent.substring(0, start) + prefix + selected + suffix + currentContent.substring(end);
+      setTimeout(() => {
+        textarea.focus();
+        textarea.selectionStart = start + prefix.length;
+        textarea.selectionEnd = end + prefix.length;
+      }, 0);
+      return next;
+    });
   };
 
   // ── Send / Edit / Delete / Reactions ─────────────────────────────────────
@@ -357,7 +418,6 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
     try {
       setUploading(true);
       const res = await axios.post<FileData>('/api/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (pe) => setUploadProgress(Math.round((pe.loaded * 100) / (pe.total ?? 1))),
       });
       setFileData(res.data);
@@ -372,15 +432,22 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
 
   if (!channel) return null;
 
-  const formatButtons = [
-    { icon: <Bold size={18} />, action: () => applyFormat('**') },
-    { icon: <Italic size={18} />, action: () => applyFormat('*') },
-    { icon: <Underline size={18} />, action: () => applyFormat('<u>', '</u>') },
-    { icon: <Strikethrough size={18} />, action: () => applyFormat('~~') },
-    { icon: <List size={18} />, action: () => applyFormat('\n• ') },
-    { icon: <ListOrdered size={18} />, action: () => applyFormat('\n1. ') },
-    { icon: <Code2 size={18} />, action: () => applyFormat('`') },
-    { icon: <Quote size={18} />, action: () => applyFormat('\n> ') },
+  // Toolbar button groups with metadata
+  const textFormattingGroup = [
+    { icon: <Bold size={18} />, action: () => applyFormat('**'), label: 'Bold', tooltip: 'Bold (Cmd+B)' },
+    { icon: <Italic size={18} />, action: () => applyFormat('*'), label: 'Italic', tooltip: 'Italic (Cmd+I)' },
+    { icon: <Underline size={18} />, action: () => applyFormat('<u>', '</u>'), label: 'Underline', tooltip: 'Underline (Cmd+U)' },
+    { icon: <Strikethrough size={18} />, action: () => applyFormat('~~'), label: 'Strikethrough', tooltip: 'Strikethrough' },
+  ];
+
+  const listGroup = [
+    { icon: <List size={18} />, action: () => applyFormat('\n• '), label: 'Bullet List', tooltip: 'Bullet List' },
+    { icon: <ListOrdered size={18} />, action: () => applyFormat('\n1. '), label: 'Numbered List', tooltip: 'Numbered List' },
+  ];
+
+  const blockGroup = [
+    { icon: <Code2 size={18} />, action: () => applyFormat('`'), label: 'Code', tooltip: 'Inline Code' },
+    { icon: <Quote size={18} />, action: () => applyFormat('\n> '), label: 'Quote', tooltip: 'Block Quote' },
   ];
 
   return (
@@ -504,13 +571,49 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
             <button onClick={() => setReplyTo(null)} aria-label="Cancel reply"><X size={18} /></button>
           </div>
         )}
-        <div className="flex items-center gap-1 border border-gray-200 rounded-t-2xl px-3 py-2 bg-white flex-wrap">
-          {formatButtons.map((item, index) => (
-            <button key={index} type="button" onMouseDown={e => { e.preventDefault(); item.action(); }}
-              className="p-2 hover:bg-gray-100 rounded-lg transition">
-              {item.icon}
-            </button>
-          ))}
+        <div className="flex items-center gap-0.5 border border-gray-200 rounded-t-2xl px-2 py-2 bg-gradient-to-b from-gray-50 to-white flex-wrap">
+          {/* Text Formatting Group */}
+          <div className="flex items-center gap-0.5">
+            {textFormattingGroup.map((item, index) => (
+              <ToolbarButton
+                key={index}
+                icon={item.icon}
+                tooltip={item.tooltip}
+                onClick={item.action}
+                ariaLabel={item.label}
+              />
+            ))}
+          </div>
+
+          <ToolbarSeparator />
+
+          {/* List Group */}
+          <div className="flex items-center gap-0.5">
+            {listGroup.map((item, index) => (
+              <ToolbarButton
+                key={index}
+                icon={item.icon}
+                tooltip={item.tooltip}
+                onClick={item.action}
+                ariaLabel={item.label}
+              />
+            ))}
+          </div>
+
+          <ToolbarSeparator />
+
+          {/* Block Group */}
+          <div className="flex items-center gap-0.5">
+            {blockGroup.map((item, index) => (
+              <ToolbarButton
+                key={index}
+                icon={item.icon}
+                tooltip={item.tooltip}
+                onClick={item.action}
+                ariaLabel={item.label}
+              />
+            ))}
+          </div>
         </div>
         <textarea
           ref={textareaRef} rows={4} value={content}

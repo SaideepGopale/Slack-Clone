@@ -1,22 +1,20 @@
-import express from 'express';
-import { createServer } from 'http';
-import { Server } from 'socket.io';
 import cors from 'cors';
-import path from 'path';
+import express from 'express';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
-import dotenv from 'dotenv';
+import { createServer } from 'http';
 import jwt from 'jsonwebtoken';
 import multer from 'multer';
+import path from 'path';
+import { Server } from 'socket.io';
+import { fileURLToPath } from 'url';
+import './env';
 
+import { prisma } from './lib/prisma';
+import { dbCheck, errorHandler } from './middleware/index';
 import authRoutes from './routes/auth';
 import channelRoutes from './routes/channels';
-import userRoutes from './routes/users';
 import invitationRoutes from './routes/invitations';
-import { dbCheck, errorHandler } from './middleware/index';
-import { prisma } from './lib/prisma';
-
-dotenv.config();
+import userRoutes from './routes/users';
 
 // Fail fast if required secrets are missing
 const JWT_SECRET = process.env.JWT_SECRET;

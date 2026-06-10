@@ -1,5 +1,5 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { User } from '../types';
 
 interface AuthContextType {

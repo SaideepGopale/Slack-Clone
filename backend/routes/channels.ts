@@ -1,5 +1,5 @@
-import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { Router } from 'express';
 import { prisma } from '../lib/prisma';
 import { authenticate, AuthenticatedRequest } from '../middleware/index';
 
@@ -124,7 +124,7 @@ router.get('/all', authenticate, async (req, res, next) => {
 
 router.post('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
   try {
-    const channel = await prisma.$transaction(async (tx: PrismaClient) => {
+    const channel = await prisma.$transaction(async (tx) => {
       const newChannel = await tx.channel.create({ 
         data: {
           name: req.body.name,
