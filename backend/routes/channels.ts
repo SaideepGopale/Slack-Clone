@@ -1,15 +1,21 @@
 import { Router } from 'express';
-import { prisma } from '../lib/prisma.ts';
-import { authenticate } from '../middleware/index.ts';
+import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma';
+import { authenticate, AuthenticatedRequest } from '../middleware/index';
+
+// Infer member type from Prisma's return type
+type ChannelWithMembers = Awaited<ReturnType<PrismaClient['channel']['findMany']>>[number] & {
+  members: Array<{ userId: string; user: { id: string; username: string } }>;
+};
 
 const router = Router();
 
-router.get('/', authenticate, async (req: any, res, next) => {
+router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
   try { 
     const channels = await prisma.channel.findMany({
       where: {
         members: {
-          some: { userId: req.user.id }
+          some: { userId: req.user!.id }
         }
       },
       include: {
@@ -24,12 +30,12 @@ router.get('/', authenticate, async (req: any, res, next) => {
     });
 
     // Map channels to include dynamic naming for DMs
-    const mappedChannels = channels.map(chan => {
+    const mappedChannels = (channels as ChannelWithMembers[]).map(chan => {
       if (chan.isDM) {
-        const otherMember = chan.members.find(m => m.userId !== req.user.id);
+        const otherMember = chan.members.find((m: { userId: string }) => m.userId !== req.user!.id);
         return {
           ...chan,
-          name: otherMember ? otherMember.user.username : 'Direct Message'
+          name: otherMember ? (otherMember as ChannelWithMembers['members'][number]).user.username : 'Direct Message'
         };
       }
       return chan;
@@ -39,10 +45,10 @@ router.get('/', authenticate, async (req: any, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/dm', authenticate, async (req: any, res, next) => {
+router.post('/dm', authenticate, async (req: AuthenticatedRequest, res, next) => {
   try {
     const { targetUserId } = req.body;
-    const currentUserId = req.user.id;
+    const currentUserId = req.user!.id;
 
     if (targetUserId === currentUserId) {
       return res.status(400).json({ error: 'Cannot create DM with yourself' });
@@ -69,10 +75,10 @@ router.post('/dm', authenticate, async (req: any, res, next) => {
     });
 
     if (existingDM) {
-      const otherMember = existingDM.members.find(m => m.userId !== currentUserId);
+      const otherMember = (existingDM as ChannelWithMembers).members.find((m: { userId: string }) => m.userId !== currentUserId);
       return res.json({
         ...existingDM,
-        name: otherMember ? otherMember.user.username : 'Direct Message'
+        name: otherMember ? (otherMember as ChannelWithMembers['members'][number]).user.username : 'Direct Message'
       });
     }
 
@@ -99,10 +105,10 @@ router.post('/dm', authenticate, async (req: any, res, next) => {
       }
     });
 
-    const otherMember = newDM.members.find(m => m.userId !== currentUserId);
+    const otherMember = (newDM as ChannelWithMembers).members.find((m: { userId: string }) => m.userId !== currentUserId);
     res.json({
       ...newDM,
-      name: otherMember ? otherMember.user.username : 'Direct Message'
+      name: otherMember ? (otherMember as ChannelWithMembers['members'][number]).user.username : 'Direct Message'
     });
   } catch (err) { next(err); }
 });
@@ -116,20 +122,20 @@ router.get('/all', authenticate, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/', authenticate, async (req: any, res, next) => {
+router.post('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
   try {
-    const channel = await prisma.$transaction(async (tx) => {
+    const channel = await prisma.$transaction(async (tx: PrismaClient) => {
       const newChannel = await tx.channel.create({ 
         data: {
           name: req.body.name,
-          createdBy: req.user.id
+          createdBy: req.user!.id
         }
       });
       
       await tx.channelMember.create({
         data: {
           channelId: newChannel.id,
-          userId: req.user.id,
+          userId: req.user!.id,
           role: 'admin'
         }
       });
@@ -181,18 +187,18 @@ router.get('/:id/search', authenticate, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/:id/join', authenticate, async (req: any, res, next) => {
+router.post('/:id/join', authenticate, async (req: AuthenticatedRequest, res, next) => {
   try {
     const membership = await prisma.channelMember.upsert({
       where: {
         userId_channelId: {
-          userId: req.user.id,
+          userId: req.user!.id,
           channelId: req.params.id
         }
       },
       update: {},
       create: {
-        userId: req.user.id,
+        userId: req.user!.id,
         channelId: req.params.id,
         role: 'member'
       }

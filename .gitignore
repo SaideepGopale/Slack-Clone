@@ -1,8 +1,45 @@
+# Dependencies
 node_modules/
-build/
+frontend/node_modules/
+backend/node_modules/
+
+# Build output
 dist/
-coverage/
-.DS_Store
-*.log
-.env*
+build/
+frontend/dist/
+backend/dist/
+
+# Uploads (user-generated files)
+backend/uploads/
+uploads/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+frontend/.env
+frontend/.env.local
+backend/.env
+backend/.env.local
+# Keep examples
 !.env.example
+!frontend/.env.example
+!backend/.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Vite cache
+frontend/.vite/

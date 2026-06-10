@@ -1,10 +1,10 @@
 import { Router } from 'express';
-import { prisma } from '../lib/prisma.ts';
-import { authenticate } from '../middleware/index.ts';
+import { prisma } from '../lib/prisma';
+import { authenticate } from '../middleware/index';
 
 const router = Router();
 
-router.get('/', authenticate, async (req, res, next) => {
+router.get('/', authenticate, async (_req, res, next) => {
   try {
     const users = await prisma.user.findMany({
       select: {

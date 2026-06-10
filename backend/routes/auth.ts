@@ -1,15 +1,23 @@
 import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
-import { prisma } from '../lib/prisma.ts';
+import { prisma } from '../lib/prisma';
 
 const router = Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'secret-key-456';
+
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error('JWT_SECRET environment variable is not set.');
+}
 
 router.post('/register', async (req, res, next) => {
   try {
     const { username, email, password } = req.body;
-    
+
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: 'username, email and password are required' });
+    }
+
     // Check if user already exists
     const existingUser = await prisma.user.findFirst({
       where: {
@@ -24,7 +32,7 @@ router.post('/register', async (req, res, next) => {
       return res.status(400).json({ error: 'User with this email or username already exists' });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 12);
     const user = await prisma.user.create({
       data: { username, email, password: hashedPassword }
     });
@@ -58,19 +66,32 @@ router.post('/register', async (req, res, next) => {
       }
     });
 
-    const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET);
-    res.json({ token, user: { id: user.id, username: user.username, email: user.email } });
+    const token = jwt.sign(
+      { id: user.id, username: user.username },
+      JWT_SECRET as string,
+      { expiresIn: '7d' }
+    );
+    res.status(201).json({ token, user: { id: user.id, username: user.username, email: user.email } });
   } catch (err) { next(err); }
 });
 
 router.post('/login', async (req, res, next) => {
   try {
     const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'email and password are required' });
+    }
+
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user || !(await bcrypt.compare(password, user.password))) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
-    const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET);
+    const token = jwt.sign(
+      { id: user.id, username: user.username },
+      JWT_SECRET as string,
+      { expiresIn: '7d' }
+    );
     res.json({ token, user: { id: user.id, username: user.username, email: user.email } });
   } catch (err) { next(err); }
 });
@@ -81,8 +102,8 @@ router.get('/me', async (req, res, next) => {
     if (!authHeader) return res.status(401).json({ error: 'No token' });
 
     const token = authHeader.split(' ')[1];
-    const decoded: any = jwt.verify(token, JWT_SECRET);
-    
+    const decoded = jwt.verify(token, JWT_SECRET as string) as { id: string };
+
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
       select: { id: true, username: true, email: true }
