@@ -1,5 +1,18 @@
 import * as nodemailer from "nodemailer";
 
+// Reusable transporter creator from development branch
+const createTransporter = () =>
+  nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 587,
+    secure: false,
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASS,
+    },
+  });
+
+// 1. Send Invite Email Function
 export const sendInviteEmail = async (to: string, inviteLink: string) => {
   const emailUser = process.env.EMAIL_USER;
   const emailPass = process.env.EMAIL_PASS;
@@ -10,12 +23,7 @@ export const sendInviteEmail = async (to: string, inviteLink: string) => {
   }
 
   try {
-    const transporter = nodemailer.createTransport({
-      host: "smtp.gmail.com",
-      port: 587,
-      secure: false,
-      auth: { user: emailUser, pass: emailPass },
-    });
+    const transporter = createTransporter();
 
     const info = await transporter.sendMail({
       from: `"Smart Chat App" <${emailUser}>`,
@@ -40,5 +48,34 @@ export const sendInviteEmail = async (to: string, inviteLink: string) => {
   } catch (error: any) {
     console.error("Email error:", error.message);
     throw new Error(`Failed to send invitation email: ${error.message}`);
+  }
+};
+
+// 2. Send Reset Password Email Function
+export const sendResetPasswordEmail = async (to: string, resetLink: string) => {
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.warn('Email credentials not configured - reset email will not be sent');
+    return;
+  }
+
+  try {
+    const transporter = createTransporter();
+
+    const info = await transporter.sendMail({
+      from: `"Smart Chat App" <${process.env.EMAIL_USER}>`,
+      to,
+      subject: "Reset your Smart Chat App password",
+      html: `
+        <h2>Password Reset</h2>
+        <p>We received a request to reset your password. Click the link below to set a new password. The link will expire in one hour.</p>
+        <a href="${resetLink}">${resetLink}</a>
+        <p>If you didn't request this, you can safely ignore this email.</p>
+      `,
+    });
+
+    console.log("Reset email sent:", info.messageId);
+  } catch (error: any) {
+    console.error("Reset email error:", error.message || error);
+    throw error;
   }
 };

@@ -153,7 +153,7 @@ router.get('/:id/messages', authenticate, async (req, res, next) => {
       where: { channelId: req.params.id },
       include: {
         sender: {
-          select: { username: true }
+          select: { id: true, username: true }
         }
       },
       orderBy: { createdAt: 'asc' }
@@ -177,7 +177,7 @@ router.get('/:id/search', authenticate, async (req, res, next) => {
       },
       include: {
         sender: {
-          select: { username: true }
+          select: { id: true, username: true }
         }
       },
       orderBy: { createdAt: 'desc' },

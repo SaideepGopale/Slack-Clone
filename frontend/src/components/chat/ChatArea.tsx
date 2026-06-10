@@ -71,6 +71,8 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
   const [fileData, setFileData] = useState<FileData | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -291,26 +293,39 @@ export const ChatArea = ({ channel, socket, onlineUsers = [] }: ChatAreaProps) =
         const res = await axios.get<ChatMessage[]>(`/api/channels/${channel.id}/messages`);
         setMessages(res.data.map(m => ({ ...m, reactions: m.reactions ?? [] })));
         socket.emit('channel:join', channel.id);
-      } catch (err) { console.error('fetchMessages error:', err); }
+      } catch (err) { 
+        console.error('fetchMessages error:', err);
+        setError('Failed to load messages');
+      }
     };
     fetchMessages();
 
     const handleMessage = (message: ChatMessage) => {
       setMessages(prev => {
-        if (prev.find(m => m.id === message.id)) return prev;
-        return [...prev, { ...message, reactions: message.reactions ?? [] }];
+        // Remove optimistic message if it exists
+        const filtered = prev.filter(m => !m.id.startsWith('temp-'));
+        if (filtered.find(m => m.id === message.id)) return filtered;
+        return [...filtered, { ...message, reactions: message.reactions ?? [] }];
       });
     };
     const handleUpdate = (updated: ChatMessage) => setMessages(prev => prev.map(m => m.id === updated.id ? updated : m));
     const handleDelete = (id: string) => setMessages(prev => prev.filter(m => m.id !== id));
+    const handleError = (data: { error: string }) => {
+      console.error('Socket error:', data.error);
+      setError(data.error);
+      setMessages(prev => prev.filter(m => !m.id.startsWith('temp-')));
+      setTimeout(() => setError(null), 5000);
+    };
 
     socket.on('message:received', handleMessage);
     socket.on('message:updated', handleUpdate);
     socket.on('message:deleted', handleDelete);
+    socket.on('message:error', handleError);
     return () => {
       socket.off('message:received', handleMessage);
       socket.off('message:updated', handleUpdate);
       socket.off('message:deleted', handleDelete);
+      socket.off('message:error', handleError);
     };
   }, [channel, socket]);
 
@@ -381,13 +396,41 @@ const ToolbarSeparator: React.FC = () => (
   const handleSend = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!content.trim() && !fileData) return;
+    
+    setSending(true);
+    setError(null);
+    
+    // Create optimistic message
+    const optimisticMessage: ChatMessage = {
+      id: `temp-${Date.now()}`,
+      channelId: channel.id,
+      senderId: '',
+      sender: { id: '', username: 'You' },
+      content: content,
+      fileUrl: fileData?.url,
+      fileName: fileData?.name,
+      fileType: fileData?.type,
+      parentId: replyTo?.id,
+      createdAt: new Date().toISOString(),
+      reactions: [],
+    };
+    
+    // Add optimistic message to UI
+    setMessages(prev => [...prev, optimisticMessage]);
+    
+    // Send via socket
     socket.emit('message:send', {
       channelId: channel.id, content,
       fileUrl: fileData?.url, fileName: fileData?.name, fileType: fileData?.type,
       parentId: replyTo?.id,
     });
-    setContent(''); setReplyTo(null); setFileData(null);
-    setShowEmojiPicker(false); setShowMentionBox(false);
+    
+    setContent(''); 
+    setReplyTo(null); 
+    setFileData(null);
+    setShowEmojiPicker(false); 
+    setShowMentionBox(false);
+    setSending(false);
   };
 
   const handleEdit = () => {
@@ -413,6 +456,14 @@ const ToolbarSeparator: React.FC = () => (
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    
+    // Check file size (10MB limit)
+    if (file.size > 10 * 1024 * 1024) {
+      setError('File size must be less than 10MB');
+      setTimeout(() => setError(null), 5000);
+      return;
+    }
+    
     const formData = new FormData();
     formData.append('file', file);
     try {
@@ -421,7 +472,13 @@ const ToolbarSeparator: React.FC = () => (
         onUploadProgress: (pe) => setUploadProgress(Math.round((pe.loaded * 100) / (pe.total ?? 1))),
       });
       setFileData(res.data);
-    } catch (err) { console.error('Upload error:', err); }
+      setError(null);
+    } catch (err: any) { 
+      console.error('Upload error:', err);
+      const errorMessage = err.response?.data?.error || 'File upload failed. Please try again.';
+      setError(errorMessage);
+      setTimeout(() => setError(null), 5000);
+    }
     finally { setUploading(false); setUploadProgress(0); }
   };
 
@@ -565,6 +622,14 @@ const ToolbarSeparator: React.FC = () => (
 
       {/* ── Input area ── */}
       <div className="border-t border-gray-200 bg-white p-4 relative shrink-0">
+        {error && (
+          <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-2xl text-red-700 text-sm flex items-center justify-between">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} aria-label="Dismiss error" className="text-red-500 hover:text-red-700">
+              <X size={18} />
+            </button>
+          </div>
+        )}
         {replyTo && (
           <div className="mb-3 bg-gray-50 border border-gray-200 rounded-2xl p-3 flex items-center justify-between">
             <span className="text-sm text-gray-700">Replying to <b>{replyTo.sender?.username}</b></span>
@@ -662,14 +727,14 @@ const ToolbarSeparator: React.FC = () => (
         )}
         <div className="flex items-center justify-between mt-2">
           <div className="flex items-center gap-2">
-            <input type="file" hidden ref={fileInputRef} onChange={handleFileSelect} />
+            <input type="file" hidden ref={fileInputRef} onChange={handleFileSelect} accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.txt,.zip,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.json,.csv,.svg" />
             <button onClick={() => fileInputRef.current?.click()} className="p-3 hover:bg-gray-100 rounded-full transition" aria-label="Attach file"><Plus size={20} /></button>
             <button onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-3 hover:bg-gray-100 rounded-full transition" aria-label="Emoji picker"><Smile size={20} /></button>
             <button onClick={() => setShowMentionBox(!showMentionBox)} className="p-3 hover:bg-gray-100 rounded-full transition" aria-label="Mention someone"><AtSign size={20} /></button>
           </div>
-          <button onClick={handleSend} disabled={!content.trim() && !fileData}
-            className={`px-5 py-3 rounded-2xl flex items-center gap-2 font-medium transition ${content.trim() || fileData ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-100 text-gray-400'}`}>
-            <Send size={18} />Send
+          <button onClick={handleSend} disabled={(!content.trim() && !fileData) || sending || uploading}
+            className={`px-5 py-3 rounded-2xl flex items-center gap-2 font-medium transition ${(content.trim() || fileData) && !sending && !uploading ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-100 text-gray-400'}`}>
+            <Send size={18} />{sending ? 'Sending...' : 'Send'}
           </button>
         </div>
         <p className="text-center text-xs text-gray-400 mt-1">Press Enter to send · Shift + Enter for new line</p>
