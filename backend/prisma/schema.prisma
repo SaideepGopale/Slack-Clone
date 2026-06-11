@@ -8,16 +8,21 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  username  String   @unique
-  email     String   @unique
-  password  String
-  channels  Channel[] @relation("UserCreatedChannels")
-  messages  Message[]
-  memberships ChannelMember[]
-  invitationsSent Invitation[] @relation("UserInvites")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                   String          @id @default(uuid())
+  username             String          @unique
+  email                String          @unique
+  password             String
+  channels             Channel[]       @relation("UserCreatedChannels")
+  messages             Message[]
+  memberships          ChannelMember[]
+  invitationsSent      Invitation[]    @relation("UserInvites")
+  
+  // Forgot Password Features
+  resetPasswordToken   String?         @unique
+  resetPasswordExpires DateTime?
+  
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
 }
 
 model Invitation {
@@ -31,32 +36,32 @@ model Invitation {
 }
 
 model Channel {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   name      String?
-  isDM      Boolean  @default(false)
+  isDM      Boolean   @default(false)
   createdBy String
-  creator   User     @relation("UserCreatedChannels", fields: [createdBy], references: [id])
+  creator   User      @relation("UserCreatedChannels", fields: [createdBy], references: [id])
   messages  Message[]
   members   ChannelMember[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }
 
 model Message {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   content   String?
   fileUrl   String?
   fileName  String?
   fileType  String?
   channelId String
-  channel   Channel  @relation(fields: [channelId], references: [id])
+  channel   Channel   @relation(fields: [channelId], references: [id])
   senderId  String
-  sender    User     @relation(fields: [senderId], references: [id])
+  sender    User      @relation(fields: [senderId], references: [id])
   parentId  String?
   parent    Message?  @relation("Thread", fields: [parentId], references: [id])
   replies   Message[] @relation("Thread")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 }
 
 model ChannelMember {
