@@ -66,12 +66,23 @@ const PORT = Number(process.env.PORT) || 3000;
 
 // Multer — file size limit and MIME type allowlist
 const ALLOWED_MIME_TYPES = [
-  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+  // Images
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml',
+  // Documents
   'application/pdf',
   'text/plain',
   'application/zip',
+  'application/x-zip-compressed',
+  // Microsoft Office
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  // Other
+  'application/json',
+  'text/csv',
 ];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
@@ -124,6 +135,19 @@ app.post('/api/upload', upload.single('file'), (req: any, res) => {
   });
 });
 
+app.use((err: any, req: any, res: any, next: any) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(413).json({ error: 'File size exceeds 10MB limit' });
+    }
+    return res.status(400).json({ error: `Upload error: ${err.message}` });
+  }
+  if (err.message && err.message.includes('File type')) {
+    return res.status(400).json({ error: err.message });
+  }
+  next(err);
+});
+
 // In production, serve the built frontend
 if (process.env.NODE_ENV === 'production') {
   const frontendDist = path.resolve(__dirname, '../frontend/dist');
@@ -174,6 +198,10 @@ io.on('connection', (socket) => {
 
   socket.on('message:send', async (data) => {
     try {
+      if (!data.content?.trim() && !data.fileUrl) {
+        socket.emit('message:error', { error: 'Message cannot be empty' });
+        return;
+      }
       const msg = await prisma.message.create({
         data: {
           content: data.content,
@@ -185,13 +213,14 @@ io.on('connection', (socket) => {
           parentId: data.parentId || null,
         },
         include: {
-          sender: { select: { username: true } },
-          parent: { include: { sender: { select: { username: true } } } },
+          sender: { select: { id: true, username: true } },
+          parent: { include: { sender: { select: { id: true, username: true } } } },
         },
       });
       io.to(data.channelId).emit('message:received', msg);
     } catch (err) {
       console.error('Failed to save message:', err);
+      socket.emit('message:error', { error: 'Failed to send message. Please try again.' });
     }
   });
 

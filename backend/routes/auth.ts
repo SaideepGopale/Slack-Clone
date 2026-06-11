@@ -1,9 +1,9 @@
 import bcrypt from 'bcryptjs';
-import crypto from 'crypto'; // NAYA IMPORT: Token generate karne ke liye
+import crypto from 'crypto';
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import { prisma } from '../lib/prisma';
-import { sendResetPasswordEmail } from '../utils/mailer'; // NAYA IMPORT: Email bhejne ke liye
+import { sendResetPasswordEmail } from '../utils/mailer';
 
 const router = Router();
 
@@ -12,9 +12,7 @@ if (!JWT_SECRET) {
   throw new Error('JWT_SECRET environment variable is not set.');
 }
 
-// ==========================================
-// 1. REGISTER ROUTE
-// ==========================================
+// 1. REGISTER
 router.post('/register', async (req, res, next) => {
   try {
     const { username, email, password } = req.body;
@@ -23,14 +21,8 @@ router.post('/register', async (req, res, next) => {
       return res.status(400).json({ error: 'username, email and password are required' });
     }
 
-    // Check if user already exists
     const existingUser = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { email },
-          { username }
-        ]
-      }
+      where: { OR: [{ email }, { username }] }
     });
 
     if (existingUser) {
@@ -42,33 +34,20 @@ router.post('/register', async (req, res, next) => {
       data: { username, email, password: hashedPassword }
     });
 
-    // Auto-join #general if it exists, or create it
     let generalChannel = await prisma.channel.findFirst({
       where: { name: 'general' }
     });
 
     if (!generalChannel) {
       generalChannel = await prisma.channel.create({
-        data: {
-          name: 'general',
-          createdBy: user.id
-        }
+        data: { name: 'general', createdBy: user.id }
       });
     }
 
     await prisma.channelMember.upsert({
-      where: {
-        userId_channelId: {
-          userId: user.id,
-          channelId: generalChannel.id
-        }
-      },
+      where: { userId_channelId: { userId: user.id, channelId: generalChannel.id } },
       update: {},
-      create: {
-        userId: user.id,
-        channelId: generalChannel.id,
-        role: 'admin'
-      }
+      create: { userId: user.id, channelId: generalChannel.id, role: 'admin' }
     });
 
     const token = jwt.sign(
@@ -80,9 +59,7 @@ router.post('/register', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ==========================================
-// 2. LOGIN ROUTE
-// ==========================================
+// 2. LOGIN
 router.post('/login', async (req, res, next) => {
   try {
     const { email, password } = req.body;
@@ -104,9 +81,7 @@ router.post('/login', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ==========================================
-// 3. GET CURRENT USER ROUTE
-// ==========================================
+// 3. GET ME
 router.get('/me', async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -128,9 +103,7 @@ router.get('/me', async (req, res, next) => {
   }
 });
 
-// ==========================================
-// 4. FORGOT PASSWORD ROUTE (NAYA FEATURE)
-// ==========================================
+// 4. FORGOT PASSWORD
 router.post('/forgot-password', async (req, res, next) => {
   try {
     const { email } = req.body;
@@ -144,7 +117,7 @@ router.post('/forgot-password', async (req, res, next) => {
     }
 
     const resetToken = crypto.randomBytes(32).toString('hex');
-    const tokenExpiry = new Date(Date.now() + 3600000); // 1 ghante mein expire
+    const tokenExpiry = new Date(Date.now() + 3600000); // 1 hour
 
     await prisma.user.update({
       where: { email },
@@ -163,9 +136,7 @@ router.post('/forgot-password', async (req, res, next) => {
   }
 });
 
-// ==========================================
-// 5. RESET PASSWORD ROUTE (NAYA FEATURE)
-// ==========================================
+// 5. RESET PASSWORD
 router.post('/reset-password/:token', async (req, res, next) => {
   try {
     const { token } = req.params;
@@ -178,7 +149,7 @@ router.post('/reset-password/:token', async (req, res, next) => {
     const user = await prisma.user.findFirst({
       where: {
         resetPasswordToken: token,
-        resetPasswordExpires: { gt: new Date() }, // Time check
+        resetPasswordExpires: { gt: new Date() },
       },
     });
 
