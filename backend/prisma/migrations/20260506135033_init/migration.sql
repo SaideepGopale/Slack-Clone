@@ -26,6 +26,7 @@ CREATE TABLE "Invitation" (
 CREATE TABLE "Channel" (
     "id" TEXT NOT NULL,
     "name" TEXT,
+    "description" TEXT,
     "isDM" BOOLEAN NOT NULL DEFAULT false,
     "createdBy" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -41,6 +42,8 @@ CREATE TABLE "Message" (
     "fileUrl" TEXT,
     "fileName" TEXT,
     "fileType" TEXT,
+    "isPinned" BOOLEAN NOT NULL DEFAULT false,
+    "pollData" JSONB,
     "channelId" TEXT NOT NULL,
     "senderId" TEXT NOT NULL,
     "parentId" TEXT,

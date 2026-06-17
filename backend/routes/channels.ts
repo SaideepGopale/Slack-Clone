@@ -10,6 +10,12 @@ type ChannelWithMembers = Awaited<ReturnType<PrismaClient['channel']['findMany']
 
 const router = Router();
 
+// Check if user is admin
+const isAdmin = async (userId: string): Promise<boolean> => {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  return user?.email === 'admin@slack.com' || user?.email?.includes('admin@');
+};
+
 router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
   try { 
     const channels = await prisma.channel.findMany({
@@ -29,7 +35,6 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
       }
     });
 
-    // Map channels to include dynamic naming for DMs
     const mappedChannels = (channels as ChannelWithMembers[]).map(chan => {
       if (chan.isDM) {
         const otherMember = chan.members.find((m: { userId: string }) => m.userId !== req.user!.id);
@@ -45,6 +50,30 @@ router.get('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
   } catch (err) { next(err); }
 });
 
+// 👇 ADMIN: Get ALL channels (regardless of membership)
+router.get('/admin/all', authenticate, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const admin = await isAdmin(req.user!.id);
+    if (!admin) return res.status(403).json({ error: 'Admin access required' });
+
+    const channels = await prisma.channel.findMany({
+      where: { isDM: false },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: { id: true, username: true }
+            }
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    res.json(channels);
+  } catch (err) { next(err); }
+});
+
 router.post('/dm', authenticate, async (req: AuthenticatedRequest, res, next) => {
   try {
     const { targetUserId } = req.body;
@@ -54,7 +83,6 @@ router.post('/dm', authenticate, async (req: AuthenticatedRequest, res, next) =>
       return res.status(400).json({ error: 'Cannot create DM with yourself' });
     }
 
-    // Find existing DM
     const existingDM = await prisma.channel.findFirst({
       where: {
         isDM: true,
@@ -82,7 +110,6 @@ router.post('/dm', authenticate, async (req: AuthenticatedRequest, res, next) =>
       });
     }
 
-    // Create new DM
     const newDM = await prisma.channel.create({
       data: {
         isDM: true,
@@ -125,25 +152,52 @@ router.get('/all', authenticate, async (req, res, next) => {
 router.post('/', authenticate, async (req: AuthenticatedRequest, res, next) => {
   try {
     const channel = await prisma.$transaction(async (tx) => {
+      // 1️⃣ Naya channel banao
       const newChannel = await tx.channel.create({ 
         data: {
           name: req.body.name,
+          description: req.body.description || null,
           createdBy: req.user!.id
         }
       });
       
-      await tx.channelMember.create({
-        data: {
+      // 2️⃣ Sabhi users ko fetch karo
+      const allUsers = await tx.user.findMany({
+        select: { id: true }
+      });
+      
+      // 3️⃣ Sabhi users ko channel mein add karo
+      await tx.channelMember.createMany({
+        data: allUsers.map(user => ({
           channelId: newChannel.id,
-          userId: req.user!.id,
-          role: 'admin'
-        }
+          userId: user.id,
+          role: user.id === req.user!.id ? 'admin' : 'member'
+        }))
       });
       
       return newChannel;
     });
     
     res.json(channel);
+  } catch (err) { next(err); }
+});
+
+// --- DELETE CHANNEL (ADMIN ONLY) ---
+router.delete('/:id', authenticate, async (req: AuthenticatedRequest, res, next) => {
+  try {
+    const admin = await isAdmin(req.user!.id);
+    if (!admin) return res.status(403).json({ error: 'Admin access required' });
+
+    const channel = await prisma.channel.findUnique({ where: { id: req.params.id } });
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    
+    // Protect general channel
+    if (channel.name && channel.name.toLowerCase() === 'general') {
+      return res.status(403).json({ error: 'Cannot delete the general channel' });
+    }
+
+    await prisma.channel.delete({ where: { id: req.params.id } });
+    res.json({ message: 'Channel deleted successfully' });
   } catch (err) { next(err); }
 });
 
