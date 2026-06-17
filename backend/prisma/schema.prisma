@@ -31,41 +31,44 @@ model Invitation {
 }
 
 model Channel {
-  id        String    @id @default(uuid())
-  name      String?
-  isDM      Boolean   @default(false)
-  createdBy String
-  creator   User      @relation("UserCreatedChannels", fields: [createdBy], references: [id])
-  messages  Message[]
-  members   ChannelMember[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id          String          @id @default(uuid())
+  name        String?
+  description String?
+  isDM        Boolean         @default(false)
+  createdBy   String
+  creator     User            @relation("UserCreatedChannels", fields: [createdBy], references: [id])
+  messages    Message[]
+  members     ChannelMember[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
 }
 
 model Message {
-  id        String    @id @default(uuid())
+  id        String   @id @default(uuid())
   content   String?
   fileUrl   String?
   fileName  String?
   fileType  String?
+  isPinned  Boolean  @default(false)
+  pollData  Json?    // 👇 NAYA: Live polls save karne ke liye
   channelId String
-  channel   Channel   @relation(fields: [channelId], references: [id])
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
   senderId  String
-  sender    User      @relation(fields: [senderId], references: [id])
+  sender    User     @relation(fields: [senderId], references: [id])
   parentId  String?
-  parent    Message?  @relation("Thread", fields: [parentId], references: [id])
+  parent    Message? @relation("Thread", fields: [parentId], references: [id], onDelete: Cascade)
   replies   Message[] @relation("Thread")
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model ChannelMember {
   id        String   @id @default(uuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id])
-  isDM      Boolean  @default(false)   // ✅ ADD THIS
+  isDM      Boolean  @default(false)
   channelId String
-  channel   Channel  @relation(fields: [channelId], references: [id])
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
   role      String   @default("member")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
