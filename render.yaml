@@ -1,0 +1,64 @@
+databases:
+  - name: slack-clone-db
+    plan: free
+    databaseName: slack_clone
+    user: slack_clone
+
+services:
+  - type: web
+    name: slack-clone-backend
+    runtime: node
+    rootDir: backend
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm run db:deploy && npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: slack-clone-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      # Must equal the frontend service's real URL for CORS to allow it
+      # (see the allowedOrigins check in app.ts). Predictable from the
+      # frontend service's name below (https://<name>.onrender.com) — if
+      # that name is taken on Render and gets auto-suffixed, update this
+      # value in the Render dashboard after the first deploy.
+      - key: APP_URL
+        value: https://slack-clone-frontend.onrender.com
+      # Secrets — not safe to commit. Fill these in via the Render dashboard
+      # after the blueprint creates the service.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: EMAIL_USER
+        sync: false
+      - key: EMAIL_PASS
+        sync: false
+
+  - type: web
+    name: slack-clone-frontend
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    # Client-side routing (react-router-dom's createBrowserRouter) needs
+    # every path to fall back to index.html so deep links don't 404.
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # Predictable from the backend service's name above
+      # (https://<name>.onrender.com) — same caveat as APP_URL if that name
+      # gets auto-suffixed by Render.
+      - key: VITE_API_URL
+        value: https://slack-clone-backend.onrender.com
+      - key: VITE_BACKEND_URL
+        value: https://slack-clone-backend.onrender.com

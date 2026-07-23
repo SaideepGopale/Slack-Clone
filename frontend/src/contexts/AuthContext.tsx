@@ -11,15 +11,33 @@ interface AuthContextType {
     password: string
   ) => Promise<void>;
 
-  register: (
+  // Step 1 of sign-up: requests an email OTP. No session exists yet — the
+  // account isn't created until verifySignupOtp succeeds.
+  requestSignupOtp: (
     username: string,
     email: string,
     password: string
+  ) => Promise<{ expiresAt: string }>;
+
+  // Step 2: submits the code, and on success the backend has already
+  // created the account and issued a token — hydrates that into session
+  // state the same way hydrateSession does.
+  verifySignupOtp: (
+    email: string,
+    code: string
   ) => Promise<void>;
 
   forgotPassword: (
     email: string
   ) => Promise<void>;
+
+  // Hydrates an already-issued {token, user} pair into session state without
+  // making a login/register call — used internally by verifySignupOtp once
+  // the backend has already created the account and signed a token.
+  hydrateSession: (
+    token: string,
+    user: User
+  ) => void;
 
   logout: () => void;
   loading: boolean;
@@ -172,41 +190,36 @@ export const AuthProvider: React.FC<{
     setUser(newUser);
   };
 
-  const register = async (
+  const requestSignupOtp = async (
     username: string,
     email: string,
     password: string
   ) => {
     const res = await axios.post<{
-      token: string;
-      user: User;
-    }>('/api/auth/register', {
+      message: string;
+      expiresAt: string;
+    }>('/api/auth/signup-request', {
       username,
       email,
       password,
     });
 
-    const {
-      token: newToken,
-      user: newUser,
-    } = res.data;
+    return { expiresAt: res.data.expiresAt };
+  };
 
-    localStorage.setItem(
-      'token',
-      newToken
-    );
+  const verifySignupOtp = async (
+    email: string,
+    code: string
+  ) => {
+    const res = await axios.post<{
+      token: string;
+      user: User;
+    }>('/api/auth/verify-otp', {
+      email,
+      code,
+    });
 
-    localStorage.setItem(
-      'user',
-      JSON.stringify(newUser)
-    );
-
-    axios.defaults.headers.common[
-      'Authorization'
-    ] = `Bearer ${newToken}`;
-
-    setToken(newToken);
-    setUser(newUser);
+    hydrateSession(res.data.token, res.data.user);
   };
 
   const forgotPassword = async (
@@ -218,14 +231,31 @@ export const AuthProvider: React.FC<{
     );
   };
 
+  const hydrateSession = (
+    newToken: string,
+    newUser: User
+  ) => {
+    localStorage.setItem('token', newToken);
+    localStorage.setItem('user', JSON.stringify(newUser));
+
+    axios.defaults.headers.common[
+      'Authorization'
+    ] = `Bearer ${newToken}`;
+
+    setToken(newToken);
+    setUser(newUser);
+  };
+
   return (
     <AuthContext.Provider
       value={{
         user,
         token,
         login,
-        register,
+        requestSignupOtp,
+        verifySignupOtp,
         forgotPassword,
+        hydrateSession,
         logout,
         loading,
       }}

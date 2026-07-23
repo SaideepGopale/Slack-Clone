@@ -1,11 +1,47 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
+/*
+ * "White and Violet" brand theme — Tailwind v4 CSS-first config.
+ * Anything declared here under @theme generates real utility classes
+ * project-wide (bg-violet-900, text-surface-secondary, border-border-subtle,
+ * etc.) — this is the v4 replacement for the old tailwind.config.js
+ * `theme.extend.colors` object.
+ *
+ * The legacy --color-slack-* tokens below (in the old :root block) are left
+ * in place — several other views (HomeView, Directory, ActivityView, etc.)
+ * still reference them and are out of scope for this redesign pass.
+ */
+@theme {
+  /* Violet — primary brand color, 50 (lightest) to 950 (near-black) */
+  --color-violet-50: #f5f3ff;
+  --color-violet-100: #ede9fe;
+  --color-violet-200: #ddd6fe;
+  --color-violet-300: #c4b5fd;
+  --color-violet-400: #a78bfa;
+  --color-violet-500: #8b5cf6;
+  --color-violet-600: #7c3aed;
+  --color-violet-700: #6d28d9;
+  --color-violet-800: #5b21b6;
+  --color-violet-900: #4c1d95;
+  --color-violet-950: #2e1065;
+
+  /* Surface — backgrounds, from primary content areas to nested panels */
+  --color-surface: #ffffff;
+  --color-surface-secondary: #fafafc;
+  --color-surface-tertiary: #f3f1f8;
+
+  /* Border — dividers, lightest to most emphasized */
+  --color-border-subtle: #ece9f4;
+  --color-border-default: #e1deec;
+  --color-border-strong: #c9c4dc;
+}
+
 @layer base {
   :root {
     --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
     --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-    
+
     --color-slack-purple: #4a154b;
     --color-slack-active: #121013;
     --color-slack-sidebar: #3f0e40;

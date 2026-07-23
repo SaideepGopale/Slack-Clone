@@ -1,52 +1,68 @@
 import axios from 'axios';
-import { AlertCircle, Hash, Megaphone, Plus, RefreshCw, Search, Trash2, Zap } from 'lucide-react';
-import React, { useEffect, useState } from 'react';
+import { Hash, RefreshCw, Users } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSocket } from '../../hooks/useSocket';
 import { Channel } from '../../types';
 
+// Shape returned only by GET /api/channels/admin/all — the regular
+// GET /api/channels (sidebar listing) doesn't include this.
+interface AdminChannel extends Channel {
+  _count: { members: number };
+}
+
+const SkeletonRow = () => (
+  <tr className="animate-pulse">
+    <td className="px-6 py-4">
+      <div className="flex gap-3 items-center">
+        <div className="w-10 h-10 rounded-lg bg-gray-200 shrink-0" />
+        <div className="space-y-2">
+          <div className="h-3.5 w-32 bg-gray-200 rounded" />
+          <div className="h-2.5 w-20 bg-gray-100 rounded" />
+        </div>
+      </div>
+    </td>
+    <td className="px-6 py-4"><div className="h-5 w-14 bg-gray-100 rounded" /></td>
+    <td className="px-6 py-4"><div className="h-5 w-14 bg-gray-100 rounded" /></td>
+    <td className="px-6 py-4"><div className="h-3.5 w-16 bg-gray-100 rounded" /></td>
+    <td className="px-6 py-4 text-right"><div className="h-3.5 w-12 bg-gray-100 rounded ml-auto" /></td>
+  </tr>
+);
+
 export const ChannelManagement = () => {
   const { token } = useAuth();
   const socket = useSocket(token);
-  const [channels, setChannels] = useState<Channel[]>([]);
+  const [channels, setChannels] = useState<AdminChannel[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [newChannelName, setNewChannelName] = useState('');
-  const [newChannelDesc, setNewChannelDesc] = useState('');
-  const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const fetchAllChannels = async () => {
+  const fetchAllChannels = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await axios.get<Channel[]>('/api/channels/admin/all');
+      const res = await axios.get<AdminChannel[]>('/api/channels/admin/all');
       setChannels(res.data);
       setError(null);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Failed to fetch channels', err);
       setError('Failed to load channels');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     fetchAllChannels();
-  }, []);
+  }, [fetchAllChannels]);
 
   useEffect(() => {
     if (!socket) return;
 
     socket.on('admin:channel:list:updated', (data: any) => {
-      if (data.action === 'created') {
-        setChannels(prev => [data.channel, ...prev]);
-        setSuccess(`✅ Channel "${data.channel.name}" created!`);
-        setTimeout(() => setSuccess(null), 3000);
-      } else if (data.action === 'deleted') {
+      if (data.action === 'deleted') {
         setChannels(prev => prev.filter(c => c.id !== data.channelId));
-        setSuccess('✅ Channel deleted!');
+        setSuccess('Channel deleted!');
         setTimeout(() => setSuccess(null), 3000);
       }
     });
@@ -70,49 +86,17 @@ export const ChannelManagement = () => {
       setTimeout(() => setError(null), 3000);
       return;
     }
-    
+
     if (confirm(`Delete channel "#${channelName}"?`)) {
       try {
         await axios.delete(`/api/channels/${channelId}`);
-        setChannels(channels.filter(c => c.id !== channelId));
-        setSelectedChannel(null);
-        setSuccess(`Channel deleted!`);
+        setChannels(prev => prev.filter(c => c.id !== channelId));
+        setSuccess('Channel deleted!');
         setTimeout(() => setSuccess(null), 3000);
       } catch (err: any) {
         setError(err.response?.data?.error || 'Failed to delete channel');
       }
     }
-  };
-
-  const handleCreateChannel = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newChannelName.trim()) {
-      setError('Channel name is required');
-      return;
-    }
-
-    try {
-      const res = await axios.post<Channel>('/api/channels', { 
-        name: newChannelName, 
-        description: newChannelDesc 
-      });
-      
-      setChannels([res.data, ...channels]);
-      setIsCreateModalOpen(false);
-      setNewChannelName('');
-      setNewChannelDesc('');
-      setSuccess(`Channel created!`);
-      setTimeout(() => setSuccess(null), 3000);
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to create channel');
-    }
-  };
-
-  const getChannelIcon = (channel: Channel) => {
-    if (channel.isDM) return '@';
-    if (channel.name?.toLowerCase().includes('announcements')) return '📢';
-    if (channel.name?.toLowerCase().includes('general')) return '💬';
-    return '#';
   };
 
   return (
@@ -134,26 +118,32 @@ export const ChannelManagement = () => {
 
       <div className="flex justify-between items-center mb-8">
         <h1 className="text-3xl font-bold text-gray-900 flex items-center gap-3">
-          <div className="p-2 bg-purple-100 rounded-lg">
-            <Hash className="text-purple-600" />
+          <div className="p-2 bg-violet-100 rounded-lg">
+            <Hash className="text-violet-600" />
           </div>
           Channel Administration
         </h1>
 
         <div className="flex gap-3">
-          <input 
-            type="text" 
+          <input
+            type="text"
             placeholder="Search..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="px-4 py-2 border border-gray-200 rounded-lg"
+            className="px-4 py-2 border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-all"
           />
-          <button onClick={fetchAllChannels} className="px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50">Refresh</button>
-          <button onClick={() => setIsCreateModalOpen(true)} className="px-4 py-2 bg-blue-600 text-white rounded-lg">New Channel</button>
+          <button
+            onClick={fetchAllChannels}
+            disabled={loading}
+            className="px-4 py-2 border border-gray-200 rounded-lg hover:bg-gray-50 flex items-center gap-2 disabled:opacity-60 transition-all"
+          >
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+            Refresh
+          </button>
         </div>
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-lg">
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <table className="w-full">
           <thead className="border-b bg-gray-50">
             <tr>
@@ -166,7 +156,7 @@ export const ChannelManagement = () => {
           </thead>
           <tbody className="divide-y">
             {loading ? (
-              <tr><td colSpan={5} className="px-6 py-8 text-center">Loading...</td></tr>
+              Array.from({ length: 5 }).map((_, i) => <SkeletonRow key={i} />)
             ) : filteredChannels.length === 0 ? (
               <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-600">No channels found</td></tr>
             ) : (
@@ -174,12 +164,12 @@ export const ChannelManagement = () => {
                 <tr key={ch.id} className="hover:bg-gray-50">
                   <td className="px-6 py-4">
                     <div className="flex gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-purple-500 text-white flex items-center justify-center">
-                        {getChannelIcon(ch)}
+                      <div className="w-10 h-10 rounded-lg bg-violet-500 text-white flex items-center justify-center text-lg shrink-0">
+                        {ch.icon && ch.icon !== 'hash' ? ch.icon : <Hash size={18} />}
                       </div>
                       <div>
                         <div className="font-semibold text-gray-900">{ch.name}</div>
-                        <div className="text-xs text-gray-600">{ch.id.substring(0, 8)}</div>
+                        <div className="text-xs text-gray-400 font-mono">{ch.id.substring(0, 8)}</div>
                       </div>
                     </div>
                   </td>
@@ -191,7 +181,12 @@ export const ChannelManagement = () => {
                   <td className="px-6 py-4">
                     <span className="px-2 py-1 rounded text-xs bg-green-100 text-green-700">Active</span>
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-700">{Math.random() * 50 | 0} users</td>
+                  <td className="px-6 py-4 text-sm text-gray-700">
+                    <div className="flex items-center gap-1.5">
+                      <Users size={14} className="text-gray-400" />
+                      {ch._count.members} {ch._count.members === 1 ? 'user' : 'users'}
+                    </div>
+                  </td>
                   <td className="px-6 py-4 text-right">
                     {ch.name?.toLowerCase() !== 'general' ? (
                       <button onClick={() => handleDeleteChannel(ch.id, ch.name || '')} className="text-red-600 hover:text-red-800">Delete</button>
@@ -205,43 +200,6 @@ export const ChannelManagement = () => {
           </tbody>
         </table>
       </div>
-
-      {isCreateModalOpen && (
-        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center p-4">
-          <div className="bg-white border border-gray-200 rounded-lg w-full max-w-lg">
-            <div className="px-8 py-6 border-b">
-              <h3 className="text-lg font-bold text-gray-900">Create Channel</h3>
-            </div>
-            
-            <form onSubmit={handleCreateChannel} className="p-8">
-              <div className="mb-6">
-                <label className="block text-xs font-semibold text-gray-700 mb-2">Channel Name</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2 text-gray-600">#</span>
-                  <input
-                    type="text"
-                    required
-                    value={newChannelName}
-                    onChange={(e) => setNewChannelName(e.target.value)}
-                    placeholder="announcements"
-                    className="w-full pl-8 pr-4 py-2 border border-gray-200 rounded"
-                  />
-                </div>
-              </div>
-
-              <div className="mb-6">
-                <label className="block text-xs font-semibold text-gray-700 mb-2">Description</label>
-                <textarea value={newChannelDesc} onChange={(e) => setNewChannelDesc(e.target.value)} rows={3} className="w-full p-2 border border-gray-200 rounded" />
-              </div>
-
-              <div className="flex gap-3 justify-end">
-                <button type="button" onClick={() => setIsCreateModalOpen(false)} className="px-4 py-2 border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
-                <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Create</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

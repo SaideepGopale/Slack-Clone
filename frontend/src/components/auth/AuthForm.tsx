@@ -1,12 +1,23 @@
 import axios from 'axios';
-import { ArrowRight, Eye, EyeOff, Loader2, Lock, Shield, ShieldCheck, Zap } from 'lucide-react';
-import React, { useState } from 'react';
+import { ArrowLeft, ArrowRight, Eye, EyeOff, Loader2, Lock, Mail, RefreshCw, Shield, ShieldCheck, Zap } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { toast } from 'react-toastify';
 import { useAuth } from '../../contexts/AuthContext';
 
-export const AuthForm = () => {
-  const { login, register } = useAuth();
-  const [isLogin, setIsLogin] = useState(true);
-  const [email, setEmail] = useState('');
+const OTP_LENGTH = 6;
+
+interface AuthFormProps {
+  // /signup lands here defaulted to the Sign Up tab instead of Login.
+  startOnSignup?: boolean;
+  // Comes from ?email=... on an invite-driven signup (see LoginPage.tsx) —
+  // the invited address is fixed, so the field is locked rather than editable.
+  presetEmail?: string;
+}
+
+export const AuthForm = ({ startOnSignup = false, presetEmail }: AuthFormProps) => {
+  const { login, requestSignupOtp, verifySignupOtp } = useAuth();
+  const [isLogin, setIsLogin] = useState(!startOnSignup);
+  const [email, setEmail] = useState(presetEmail ?? '');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -16,22 +27,118 @@ export const AuthForm = () => {
   // Admin Portal State
   const [isAdminMode, setIsAdminMode] = useState(false);
 
+  // Sign-up is a two-step flow: collect details -> verify the emailed code.
+  // No account exists (and no session starts) until step 2 succeeds.
+  const [signupStep, setSignupStep] = useState<'form' | 'otp'>('form');
+  const [otpDigits, setOtpDigits] = useState<string[]>(Array(OTP_LENGTH).fill(''));
+  const [otpExpiresAt, setOtpExpiresAt] = useState<number | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState(0);
+  const [verifying, setVerifying] = useState(false);
+  const [resending, setResending] = useState(false);
+  const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+
+  useEffect(() => {
+    if (!otpExpiresAt) return;
+    const tick = () => setSecondsLeft(Math.max(0, Math.ceil((otpExpiresAt - Date.now()) / 1000)));
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [otpExpiresAt]);
+
+  const resetSignupFlow = () => {
+    setSignupStep('form');
+    setOtpDigits(Array(OTP_LENGTH).fill(''));
+    setOtpExpiresAt(null);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setMessage(null);
     try {
-      if (isAdminMode) {
+      if (isAdminMode || isLogin) {
         await login(email, password);
-      } else if (isLogin) {
-        await login(email, password);
-      } else {
-        await register(username, email, password);
+        return;
       }
+
+      const { expiresAt } = await requestSignupOtp(username, email, password);
+      setOtpExpiresAt(new Date(expiresAt).getTime());
+      setSignupStep('otp');
+      toast.success(`Verification code sent to ${email}`);
     } catch (err: any) {
-      setMessage({ text: err.response?.data?.error || 'Authentication failed', type: 'error' });
+      const text = err.response?.data?.error || 'Authentication failed';
+      setMessage({ text, type: 'error' });
+      toast.error(text);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleOtpDigitChange = (index: number, value: string) => {
+    const digit = value.replace(/\D/g, '').slice(-1);
+    setOtpDigits((prev) => {
+      const next = [...prev];
+      next[index] = digit;
+      return next;
+    });
+    if (digit && index < OTP_LENGTH - 1) {
+      otpInputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  const handleOtpKeyDown = (index: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Backspace' && !otpDigits[index] && index > 0) {
+      otpInputRefs.current[index - 1]?.focus();
+    }
+  };
+
+  const handleOtpPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pasted = e.clipboardData.getData('text').replace(/\D/g, '').slice(0, OTP_LENGTH);
+    if (!pasted) return;
+    e.preventDefault();
+    setOtpDigits((prev) => {
+      const next = [...prev];
+      for (let i = 0; i < OTP_LENGTH; i++) next[i] = pasted[i] ?? next[i];
+      return next;
+    });
+    otpInputRefs.current[Math.min(pasted.length, OTP_LENGTH - 1)]?.focus();
+  };
+
+  const handleVerifyOtp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const code = otpDigits.join('');
+    if (code.length !== OTP_LENGTH) {
+      toast.error(`Enter all ${OTP_LENGTH} digits.`);
+      return;
+    }
+
+    setVerifying(true);
+    try {
+      await verifySignupOtp(email, code);
+      toast.success('Email verified — welcome aboard!');
+      // AuthContext now has a user/token; the router redirects away from
+      // here on its own (see pages/auth/LoginPage.tsx), no navigation needed.
+    } catch (err: any) {
+      const text = err.response?.data?.error || 'Invalid or expired code.';
+      toast.error(text);
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const handleResendCode = async () => {
+    if (secondsLeft > 0) return;
+    setResending(true);
+    try {
+      const { expiresAt } = await requestSignupOtp(username, email, password);
+      setOtpExpiresAt(new Date(expiresAt).getTime());
+      setOtpDigits(Array(OTP_LENGTH).fill(''));
+      otpInputRefs.current[0]?.focus();
+      toast.success('New code sent.');
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Failed to resend code.');
+    } finally {
+      setResending(false);
     }
   };
 
@@ -54,10 +161,11 @@ export const AuthForm = () => {
 
   const toggleAdminMode = () => {
     setIsAdminMode(!isAdminMode);
-    setIsLogin(true); 
+    setIsLogin(true);
     setMessage(null);
     setEmail('');
     setPassword('');
+    resetSignupFlow();
   };
 
   // ==========================================
@@ -190,64 +298,146 @@ export const AuthForm = () => {
 
         {/* Right Side Form */}
         <div className="bg-white p-8 lg:p-10 rounded-[2rem] shadow-[0_20px_40px_-15px_rgba(0,0,0,0.05)] border border-gray-100 relative">
-          
-          <div className="flex p-1 bg-gray-50 rounded-xl mb-8">
-            <button type="button" onClick={() => { setIsLogin(true); setMessage(null); }} className={`flex-1 py-2.5 text-sm font-black rounded-lg transition-all ${isLogin ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>Login</button>
-            <button type="button" onClick={() => { setIsLogin(false); setMessage(null); }} className={`flex-1 py-2.5 text-sm font-black rounded-lg transition-all ${!isLogin ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>Sign Up</button>
-          </div>
 
-          <div className="mb-8">
-            <h2 className="text-2xl font-black text-gray-900 tracking-tight mb-2">{isLogin ? 'Sign In' : 'Create Account'}</h2>
-            <p className="text-sm text-gray-400 font-medium">Enter your details to continue.</p>
-          </div>
-
-          {message && (
-            <div className={`p-4 rounded-xl mb-6 text-sm font-bold flex items-center gap-2 ${message.type === 'error' ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
-              <div className={`w-1.5 h-1.5 rounded-full ${message.type === 'error' ? 'bg-red-600' : 'bg-green-600'}`} />
-              {message.text}
-            </div>
-          )}
-
-          <form onSubmit={handleSubmit} className="space-y-5">
-            {!isLogin && (
-              <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Full Name</label>
-                <input required type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full bg-gray-50 border border-transparent focus:border-gray-200 focus:bg-white rounded-xl px-4 py-3 text-sm font-bold text-gray-900 outline-none transition-all placeholder:font-medium placeholder:text-gray-400" placeholder="Samarth Karale" />
-              </div>
-            )}
-            
-            <div>
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Email Address</label>
-              <input required type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="w-full bg-gray-50 border border-transparent focus:border-gray-200 focus:bg-white rounded-xl px-4 py-3 text-sm font-bold text-gray-900 outline-none transition-all placeholder:font-medium placeholder:text-gray-400" placeholder="samarth@example.com" />
-            </div>
-
-            <div className="relative">
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Secret Password</label>
-              <input required type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} className="w-full bg-gray-50 border border-transparent focus:border-gray-200 focus:bg-white rounded-xl pl-4 pr-12 py-3 text-sm font-bold text-gray-900 outline-none transition-all placeholder:font-medium placeholder:text-gray-400" placeholder="••••••••" />
-              <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-[30px] text-gray-400 hover:text-gray-600 transition-colors">
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+          {!isLogin && signupStep === 'otp' ? (
+            <>
+              <button
+                type="button"
+                onClick={resetSignupFlow}
+                className="flex items-center gap-1.5 text-xs font-bold text-gray-400 hover:text-gray-700 transition-colors mb-6"
+              >
+                <ArrowLeft size={14} /> Back
               </button>
-            </div>
 
-            {isLogin && (
-              <div className="flex justify-end mt-2">
-                <button type="button" onClick={handleForgotPassword} disabled={loading} className="text-xs font-bold text-[#350d36] hover:text-purple-900 transition-colors">
-                  Forgot Password?
+              <div className="mb-8">
+                <div className="w-12 h-12 rounded-xl bg-violet-50 border border-violet-100 flex items-center justify-center text-violet-600 mb-4">
+                  <Mail size={22} />
+                </div>
+                <h2 className="text-2xl font-black text-gray-900 tracking-tight mb-2">Verify your email</h2>
+                <p className="text-sm text-gray-400 font-medium">
+                  Enter the 6-digit code sent to <span className="font-bold text-gray-600">{email}</span>
+                </p>
+              </div>
+
+              <form onSubmit={handleVerifyOtp} className="space-y-6">
+                <div className="flex justify-between gap-2" onPaste={handleOtpPaste}>
+                  {otpDigits.map((digit, i) => (
+                    <input
+                      key={i}
+                      ref={(el) => { otpInputRefs.current[i] = el; }}
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={1}
+                      value={digit}
+                      autoFocus={i === 0}
+                      onChange={(e) => handleOtpDigitChange(i, e.target.value)}
+                      onKeyDown={(e) => handleOtpKeyDown(i, e)}
+                      className="w-full aspect-square text-center text-xl font-black text-gray-900 bg-gray-50 border-2 border-transparent focus:border-violet-500 focus:bg-white focus:ring-4 focus:ring-violet-100 rounded-xl outline-none transition-all"
+                    />
+                  ))}
+                </div>
+
+                <div className="flex items-center justify-between text-xs font-bold">
+                  <span className="text-gray-400">
+                    {secondsLeft > 0 ? (
+                      <>Code expires in <span className="text-gray-700 tabular-nums">{Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, '0')}</span></>
+                    ) : (
+                      <span className="text-red-500">Code expired</span>
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleResendCode}
+                    disabled={secondsLeft > 0 || resending}
+                    className="flex items-center gap-1.5 text-violet-600 hover:text-violet-800 disabled:text-gray-300 disabled:cursor-not-allowed transition-colors uppercase tracking-widest"
+                  >
+                    {resending ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                    Resend Code
+                  </button>
+                </div>
+
+                <button
+                  disabled={verifying || otpDigits.some((d) => !d)}
+                  type="submit"
+                  className="w-full py-3.5 bg-violet-600 hover:bg-violet-700 text-white rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-violet-600/20"
+                >
+                  {verifying ? <Loader2 size={18} className="animate-spin" /> : <>Verify & Continue <ArrowRight size={16} /></>}
+                </button>
+              </form>
+            </>
+          ) : (
+            <>
+              <div className="flex p-1 bg-gray-50 rounded-xl mb-8">
+                <button type="button" onClick={() => { setIsLogin(true); setMessage(null); resetSignupFlow(); }} className={`flex-1 py-2.5 text-sm font-black rounded-lg transition-all ${isLogin ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>Login</button>
+                <button type="button" onClick={() => { setIsLogin(false); setMessage(null); resetSignupFlow(); }} className={`flex-1 py-2.5 text-sm font-black rounded-lg transition-all ${!isLogin ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>Sign Up</button>
+              </div>
+
+              <div className="mb-8">
+                <h2 className="text-2xl font-black text-gray-900 tracking-tight mb-2">{isLogin ? 'Sign In' : 'Create Account'}</h2>
+                <p className="text-sm text-gray-400 font-medium">{isLogin ? 'Enter your details to continue.' : "We'll email you a code to verify it's really you."}</p>
+              </div>
+
+              {message && (
+                <div className={`p-4 rounded-xl mb-6 text-sm font-bold flex items-center gap-2 ${message.type === 'error' ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+                  <div className={`w-1.5 h-1.5 rounded-full ${message.type === 'error' ? 'bg-red-600' : 'bg-green-600'}`} />
+                  {message.text}
+                </div>
+              )}
+
+              <form onSubmit={handleSubmit} className="space-y-5">
+                {!isLogin && (
+                  <div>
+                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Full Name</label>
+                    <input required type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full bg-gray-50 border border-transparent focus:border-gray-200 focus:bg-white rounded-xl px-4 py-3 text-sm font-bold text-gray-900 outline-none transition-all placeholder:font-medium placeholder:text-gray-400" placeholder="Samarth Karale" />
+                  </div>
+                )}
+
+                <div>
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Email Address</label>
+                  <input
+                    required
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    disabled={!isLogin && !!presetEmail}
+                    readOnly={!isLogin && !!presetEmail}
+                    className="w-full bg-gray-50 border border-transparent focus:border-gray-200 focus:bg-white rounded-xl px-4 py-3 text-sm font-bold text-gray-900 outline-none transition-all placeholder:font-medium placeholder:text-gray-400 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed"
+                    placeholder="samarth@example.com"
+                  />
+                  {!isLogin && !!presetEmail && (
+                    <p className="text-[11px] text-gray-400 font-medium mt-1.5">This invite was sent to this address.</p>
+                  )}
+                </div>
+
+                <div className="relative">
+                  <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Secret Password</label>
+                  <input required type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} className="w-full bg-gray-50 border border-transparent focus:border-gray-200 focus:bg-white rounded-xl pl-4 pr-12 py-3 text-sm font-bold text-gray-900 outline-none transition-all placeholder:font-medium placeholder:text-gray-400" placeholder="••••••••" />
+                  <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-[30px] text-gray-400 hover:text-gray-600 transition-colors">
+                    {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+
+                {isLogin && (
+                  <div className="flex justify-end mt-2">
+                    <button type="button" onClick={handleForgotPassword} disabled={loading} className="text-xs font-bold text-[#350d36] hover:text-purple-900 transition-colors">
+                      Forgot Password?
+                    </button>
+                  </div>
+                )}
+
+                <button disabled={loading} type="submit" className="w-full py-3.5 bg-[#350d36] hover:bg-[#4a154b] text-white rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-all active:scale-[0.98] mt-6 shadow-lg shadow-purple-900/20 disabled:opacity-70">
+                  {loading ? <Loader2 size={18} className="animate-spin" /> : <>{isLogin ? 'Sign In' : 'Send Verification Code'} <ArrowRight size={16} /></>}
+                </button>
+              </form>
+
+              {/* Admin Portal Entry Point */}
+              <div className="mt-8 flex justify-center items-center gap-3 border-t border-gray-100 pt-6">
+                <button type="button" onClick={toggleAdminMode} className="text-[10px] font-bold text-gray-400 hover:text-gray-800 uppercase tracking-widest transition-colors">
+                  Access Admin Portal
                 </button>
               </div>
-            )}
-
-            <button disabled={loading} type="submit" className="w-full py-3.5 bg-[#350d36] hover:bg-[#4a154b] text-white rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-all active:scale-[0.98] mt-6 shadow-lg shadow-purple-900/20 disabled:opacity-70">
-              {loading ? <Loader2 size={18} className="animate-spin" /> : <>{isLogin ? 'Sign In' : 'Create Workspace'} <ArrowRight size={16} /></>}
-            </button>
-          </form>
-          
-          {/* Admin Portal Entry Point */}
-          <div className="mt-8 flex justify-center items-center gap-3 border-t border-gray-100 pt-6">
-            <button type="button" onClick={toggleAdminMode} className="text-[10px] font-bold text-gray-400 hover:text-gray-800 uppercase tracking-widest transition-colors">
-              Access Admin Portal
-            </button>
-          </div>
+            </>
+          )}
 
         </div>
       </div>
