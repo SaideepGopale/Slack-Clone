@@ -4,7 +4,12 @@ services:
     runtime: node
     rootDir: backend
     plan: free
-    buildCommand: npm ci && npm run build
+    # --include=dev is required here: NODE_ENV=production below is exported
+    # into the build environment too (not just runtime), which makes plain
+    # `npm ci` skip devDependencies — and typescript, @types/*, vitest, and
+    # supertest all live there. Without this flag `tsc` can't find type
+    # declarations for express/multer/jsonwebtoken/etc. and the build fails.
+    buildCommand: npm ci --include=dev && npm run build
     startCommand: npm run db:deploy && npm start
     healthCheckPath: /api/health
     envVars:
