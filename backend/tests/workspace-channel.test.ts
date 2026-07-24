@@ -67,3 +67,39 @@ describe('workspace + channel lifecycle', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('PATCH /api/users/me/active-workspace', () => {
+  it('updates lastActiveWorkspaceId for a member, and reflects it on the next /me call', async () => {
+    const { token } = await createAndLoginUser();
+    const createRes = await request(app)
+      .post('/api/workspaces')
+      .set(authHeader(token))
+      .send({ name: `Active Workspace Test ${Date.now()}` });
+    const workspaceId = createRes.body.workspace.id;
+
+    const patchRes = await request(app)
+      .patch('/api/users/me/active-workspace')
+      .set(authHeader(token))
+      .send({ workspaceId });
+    expect(patchRes.status).toBe(204);
+
+    const meRes = await request(app).get('/api/auth/me').set(authHeader(token));
+    expect(meRes.body.lastActiveWorkspaceId).toBe(workspaceId);
+  });
+
+  it('rejects setting it to a workspace the caller is not a member of', async () => {
+    const owner = await createAndLoginUser();
+    const outsider = await createAndLoginUser();
+    const createRes = await request(app)
+      .post('/api/workspaces')
+      .set(authHeader(owner.token))
+      .send({ name: `Private Active Workspace Test ${Date.now()}` });
+    const workspaceId = createRes.body.workspace.id;
+
+    const res = await request(app)
+      .patch('/api/users/me/active-workspace')
+      .set(authHeader(outsider.token))
+      .send({ workspaceId });
+    expect(res.status).toBe(403);
+  });
+});

@@ -45,6 +45,14 @@ model User {
   ownedWorkspaces Workspace[]       @relation("WorkspaceOwner")
   workspaces      WorkspaceMember[]
   notifications   Notification[]
+  // Where to land this user on login/signup — set once at signup (see
+  // joinGeneralChannel in auth.service.ts) and kept in sync whenever they
+  // switch workspaces (WorkspaceLayout.tsx calls PATCH /api/users/me/active-
+  // workspace). SetNull rather than Cascade/Restrict: losing this is a UX
+  // regression (falls back to "first workspace in the list"), not a reason
+  // to block deleting the workspace itself or the user.
+  lastActiveWorkspaceId String?
+  lastActiveWorkspace   Workspace?        @relation("UserLastActiveWorkspace", fields: [lastActiveWorkspaceId], references: [id], onDelete: SetNull)
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 }
@@ -77,6 +85,11 @@ model Workspace {
   messages    Message[]
   invitations Invitation[]
   createdAt   DateTime          @default(now())
+  // Reverse side of User.lastActiveWorkspace — every user currently "parked"
+  // on this workspace as their landing page. Not used directly anywhere
+  // (Prisma requires the back-relation to be declared), but deleting this
+  // workspace SetNulls all of these via the FK above.
+  usersLastActiveHere User[] @relation("UserLastActiveWorkspace")
 }
 
 model WorkspaceMember {

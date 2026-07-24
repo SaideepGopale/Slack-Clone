@@ -2,6 +2,7 @@ import axios from 'axios';
 import { useEffect, useState } from 'react';
 import { Navigate } from 'react-router-dom';
 import { CreateWorkspaceModal } from '../../components/sidebar/CreateWorkspaceModal';
+import { useAuth } from '../../contexts/AuthContext';
 import { Workspace } from '../../types';
 import { LoadingScreen } from './WorkspaceLayout';
 
@@ -11,13 +12,23 @@ import { LoadingScreen } from './WorkspaceLayout';
 // invitation acceptance both guarantee this backend-side), so the "zero
 // workspaces" branch below is a defensive fallback, not the expected path.
 export const WorkspaceRedirect = () => {
+  const { user } = useAuth();
   const [workspaceId, setWorkspaceId] = useState<string | null>();
 
   useEffect(() => {
     axios.get<Workspace[]>('/api/workspaces')
-      .then(res => setWorkspaceId(res.data[0]?.id ?? null))
+      .then(res => {
+        // Prefer wherever the user was last active, but only if it's still
+        // actually in their list (they could have lost access, or it could
+        // have been deleted) — otherwise fall back to the first workspace,
+        // same as before this field existed.
+        const lastActive = user?.lastActiveWorkspaceId
+          ? res.data.find(w => w.id === user.lastActiveWorkspaceId)
+          : undefined;
+        setWorkspaceId(lastActive?.id ?? res.data[0]?.id ?? null);
+      })
       .catch(() => setWorkspaceId(null));
-  }, []);
+  }, [user?.lastActiveWorkspaceId]);
 
   if (workspaceId === undefined) return <LoadingScreen />;
   if (workspaceId) return <Navigate to={`/${workspaceId}`} replace />;

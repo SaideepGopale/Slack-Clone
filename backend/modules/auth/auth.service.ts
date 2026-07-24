@@ -30,11 +30,14 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // joins the Default Workspace (the one every pre-existing user/channel was
 // backfilled into when workspaces were introduced) as a MEMBER, then joins
 // that workspace's own "General" channel the same way registration always has.
-const joinGeneralChannel = async (tx: Prisma.TransactionClient, userId: string) => {
+// Returns the default workspace's id (so callers can hand it straight back
+// to the client as "where to land this user"), or null on either bail-out
+// path below.
+const joinGeneralChannel = async (tx: Prisma.TransactionClient, userId: string): Promise<string | null> => {
   const defaultWorkspace = await tx.workspace.findUnique({ where: { slug: DEFAULT_WORKSPACE_SLUG } });
   if (!defaultWorkspace) {
     console.error(`No default workspace (slug="${DEFAULT_WORKSPACE_SLUG}") found — run the workspaces migration/seed first.`);
-    return;
+    return null;
   }
 
   await tx.workspaceMember.upsert({
@@ -42,6 +45,11 @@ const joinGeneralChannel = async (tx: Prisma.TransactionClient, userId: string) 
     update: {},
     create: { userId, workspaceId: defaultWorkspace.id, role: 'MEMBER' },
   });
+
+  // A brand-new signup's only workspace — set as their landing page from
+  // the start, same field WorkspaceLayout.tsx keeps updated afterward on
+  // every subsequent workspace switch.
+  await tx.user.update({ where: { id: userId }, data: { lastActiveWorkspaceId: defaultWorkspace.id } });
 
   const generalChannel = await tx.channel.findFirst({
     where: { name: 'General', isDM: false, workspaceId: defaultWorkspace.id },
@@ -51,13 +59,15 @@ const joinGeneralChannel = async (tx: Prisma.TransactionClient, userId: string) 
     // ops/seeding issue, not something a new account should paper over by
     // spawning a stray channel.
     console.error('No "General" channel found in the default workspace — run reset-to-general-channel.ts to seed it.');
-    return;
+    return defaultWorkspace.id;
   }
   await tx.channelMember.upsert({
     where: { userId_channelId: { userId, channelId: generalChannel.id } },
     update: {},
     create: { userId, channelId: generalChannel.id, role: 'member' },
   });
+
+  return defaultWorkspace.id;
 };
 
 /**
@@ -151,14 +161,23 @@ export const verifySignupOtp = async (email: string, code: string) => {
       data: { username: pending.username, email: pending.email, password: pending.password },
     });
 
-    await joinGeneralChannel(tx, newUser.id);
+    const defaultWorkspaceId = await joinGeneralChannel(tx, newUser.id);
     await tx.oTPVerification.delete({ where: { email } });
 
-    return newUser;
+    return { ...newUser, lastActiveWorkspaceId: defaultWorkspaceId };
   });
 
   const token = signToken({ id: user.id, username: user.username, role: user.role });
-  return { token, user: { id: user.id, username: user.username, email: user.email, role: user.role } };
+  return {
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      lastActiveWorkspaceId: user.lastActiveWorkspaceId,
+    },
+  };
 };
 
 export const login = async (email: string, password: string) => {
@@ -175,13 +194,22 @@ export const login = async (email: string, password: string) => {
   }
 
   const token = signToken({ id: user.id, username: user.username, role: user.role });
-  return { token, user: { id: user.id, username: user.username, email: user.email, role: user.role } };
+  return {
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      lastActiveWorkspaceId: user.lastActiveWorkspaceId,
+    },
+  };
 };
 
 export const getMe = async (userId: string) => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { id: true, username: true, email: true, role: true },
+    select: { id: true, username: true, email: true, role: true, lastActiveWorkspaceId: true },
   });
   if (!user) throw new HttpError(404, 'User not found');
   return user;

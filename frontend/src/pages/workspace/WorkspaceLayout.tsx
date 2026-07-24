@@ -165,6 +165,15 @@ export const WorkspaceLayout = () => {
     }
   }, [token, fetchChannels, fetchDMs]);
 
+  // Fire-and-forget: keeps User.lastActiveWorkspaceId in sync so a future
+  // login/signup lands the user back here instead of always defaulting to
+  // their first workspace (see WorkspaceRedirect.tsx). Not critical-path —
+  // a failure here shouldn't block or error out the workspace switch itself.
+  useEffect(() => {
+    if (!token || !workspaceId) return;
+    axios.patch('/api/users/me/active-workspace', { workspaceId }).catch(() => {});
+  }, [token, workspaceId]);
+
   useEffect(() => {
     if (!socket) return;
 

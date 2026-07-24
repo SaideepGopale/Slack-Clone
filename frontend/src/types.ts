@@ -3,6 +3,10 @@ export interface User {
   username: string;
   email?: string;
   role?: string;
+  // Where WorkspaceRedirect lands this user — kept in sync by WorkspaceLayout
+  // whenever they switch workspaces. Absent/null falls back to whichever
+  // workspace is first in their /api/workspaces list.
+  lastActiveWorkspaceId?: string | null;
 }
 
 export interface Workspace {
