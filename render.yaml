@@ -10,7 +10,15 @@ services:
     # supertest all live there. Without this flag `tsc` can't find type
     # declarations for express/multer/jsonwebtoken/etc. and the build fails.
     buildCommand: npm ci --include=dev && npm run build
-    startCommand: npm run db:deploy && npm start
+    # `npm start` (node dist/server.js) fails at runtime: this backend uses
+    # native ESM ("type": "module") with extensionless relative imports
+    # (e.g. `from './app'`), which tsc leaves as-is when compiling — Node's
+    # own ESM loader requires the full `.js` extension on relative imports
+    # and can't resolve these, throwing ERR_MODULE_NOT_FOUND. `npm run build`
+    # above still runs as a type-check gate, but running the TS source
+    # directly via tsx (same as the dev script) sidesteps the compiled
+    # output's extension problem entirely.
+    startCommand: npm run db:deploy && npx tsx server.ts
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
