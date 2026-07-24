@@ -1,9 +1,3 @@
-databases:
-  - name: slack-clone-db
-    plan: free
-    databaseName: slack_clone
-    user: slack_clone
-
 services:
   - type: web
     name: slack-clone-backend
@@ -16,10 +10,13 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Database is Supabase, not Render's managed Postgres — no
+      # `databases:` block/fromDatabase here. Paste the Supabase connection
+      # string (Session pooler, not the direct/IPv6-only one — see deploy
+      # notes) into this var via the Render dashboard after the blueprint
+      # creates the service.
       - key: DATABASE_URL
-        fromDatabase:
-          name: slack-clone-db
-          property: connectionString
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       # Must equal the frontend service's real URL for CORS to allow it
