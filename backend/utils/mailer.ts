@@ -1,15 +1,24 @@
 import * as nodemailer from "nodemailer";
 
-// Reusable transporter creator from development branch
+// Port 465 (implicit TLS) instead of 587 (STARTTLS) — some hosts (Render's
+// free tier included) block outbound 587 to fight spam abuse, which showed
+// up as sendOtpEmail hanging for a full 2 minutes before timing out rather
+// than failing fast. 465 is more often left open. The explicit *Timeout
+// options are the other half of that fix: without them nodemailer falls
+// back to very long OS-level defaults, so a still-blocked port silently
+// hangs the request instead of erroring quickly.
 const createTransporter = () =>
   nodemailer.createTransport({
     host: "smtp.gmail.com",
-    port: 587,
-    secure: false,
+    port: 465,
+    secure: true,
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASS,
     },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000,
   });
 
 // 1. Send Invite Email Function
