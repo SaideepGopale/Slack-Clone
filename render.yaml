@@ -33,12 +33,12 @@ services:
       - key: JWT_SECRET
         generateValue: true
       # Must equal the frontend service's real URL for CORS to allow it
-      # (see the allowedOrigins check in app.ts). Predictable from the
-      # frontend service's name below (https://<name>.onrender.com) — if
-      # that name is taken on Render and gets auto-suffixed, update this
-      # value in the Render dashboard after the first deploy.
+      # (see the allowedOrigins check in app.ts). The "slack-clone-frontend"
+      # name was already taken on Render, so it got suffixed to this actual
+      # deployed URL — update this again if the service is ever recreated
+      # under a different name/suffix.
       - key: APP_URL
-        value: https://slack-clone-frontend.onrender.com
+        value: https://slack-clone-frontend-gpvf.onrender.com
       # Secrets — not safe to commit. Fill these in via the Render dashboard
       # after the blueprint creates the service.
       - key: CLOUDINARY_CLOUD_NAME
@@ -65,10 +65,9 @@ services:
         source: /*
         destination: /index.html
     envVars:
-      # Predictable from the backend service's name above
-      # (https://<name>.onrender.com) — same caveat as APP_URL if that name
-      # gets auto-suffixed by Render.
+      # "slack-clone-backend" was already taken on Render too, so the actual
+      # deployed backend is at this suffixed URL — same caveat as APP_URL.
       - key: VITE_API_URL
-        value: https://slack-clone-backend.onrender.com
+        value: https://slack-clone-backend-w8qp.onrender.com
       - key: VITE_BACKEND_URL
-        value: https://slack-clone-backend.onrender.com
+        value: https://slack-clone-backend-w8qp.onrender.com
