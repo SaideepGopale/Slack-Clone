@@ -1,13 +1,19 @@
-import { Calendar, Clock, HelpCircle, LogOut, Mail, Menu, Phone, Search, Settings, User as UserIcon } from 'lucide-react';
+import { Calendar, Clock, HelpCircle, LogOut, Mail, Menu, Phone, Search, Settings, User as UserIcon, UserPlus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
-import { useSocket } from '../../hooks/useSocket';
+import { useWorkspace } from '../../pages/workspace/WorkspaceContext';
+import { InviteMemberModal } from './InviteMemberModal';
 
 export const Header = ({ onMenuClick }: { onMenuClick?: () => void }) => {
   const { user, logout } = useAuth();
-  const { token } = useAuth();
-  const socket = useSocket(token);
+  // Shares WorkspaceLayout's already-established socket via context instead
+  // of calling useSocket(token) again — Header only ever renders inside
+  // WorkspaceLayout, and useSocket isn't a singleton: each independent call
+  // opens its own real Socket.IO connection. Before this fix, every regular
+  // user session was opening two full duplicate connections for no reason.
+  const { workspaceId, socket } = useWorkspace();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
   const [userStatus, setUserStatus] = useState<'active' | 'away' | 'in_meeting'>('active');
   const [statusEmoji, setStatusEmoji] = useState('🟢');
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -66,6 +72,15 @@ export const Header = ({ onMenuClick }: { onMenuClick?: () => void }) => {
       </div>
 
       <div className="flex-1 flex justify-end items-center gap-2 relative" ref={dropdownRef}>
+        <button
+          onClick={() => setShowInviteModal(true)}
+          className="hidden sm:flex items-center gap-2 px-3.5 py-2 bg-white/10 hover:bg-white/20 border border-white/20 hover:border-white/30 rounded-xl text-sm font-semibold text-gray-100 hover:text-white transition-all active:scale-95"
+          title="Invite people to this workspace"
+        >
+          <UserPlus size={16} />
+          Invite People
+        </button>
+
         <button className="hidden sm:flex p-2 text-gray-200 hover:text-white hover:bg-white/10 rounded-lg transition-all items-center justify-center" title="Help & Support">
           <HelpCircle size={18} />
         </button>
@@ -196,6 +211,12 @@ export const Header = ({ onMenuClick }: { onMenuClick?: () => void }) => {
           </div>
         )}
       </div>
+
+      <InviteMemberModal
+        isOpen={showInviteModal}
+        onClose={() => setShowInviteModal(false)}
+        workspaceId={workspaceId}
+      />
     </header>
   );
 };

@@ -2,75 +2,12 @@ import axios from 'axios';
 import { AlertCircle, CheckCircle2, Clock, Filter, Grid, Hash, KeyRound, List as ListIcon, Mail, MoreHorizontal, Search, Share2, ShieldAlert, Trash2, UserPlus, Users } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useState } from 'react';
+import { toast } from 'react-toastify';
 import { useAuth } from '../../contexts/AuthContext';
+import { useWorkspace } from '../../pages/workspace/WorkspaceContext';
+import { InviteMemberModal } from './InviteMemberModal';
 
 const tabs = ['People', 'Channels', 'User Groups', 'External', 'Invitations'];
-
-const InviteModal = ({ isOpen, onClose, onInvite }: { isOpen: boolean, onClose: () => void, onInvite: (email: string) => void }) => {
-  const [email, setEmail] = useState('');
-  const [loading, setLoading] = useState(false);
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.9 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl"
-      >
-        <div className="p-8">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 bg-slack-purple/10 rounded-2xl flex items-center justify-center text-slack-purple shrink-0">
-              <Mail size={24} />
-            </div>
-            <div>
-              <h3 className="text-xl font-black text-gray-900 tracking-tight">Invite to Slack</h3>
-              <p className="text-xs text-gray-400 font-bold uppercase tracking-widest leading-none mt-1">Grow your workspace</p>
-            </div>
-          </div>
-
-          <div className="space-y-4">
-            <div>
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Email Address</label>
-              <input
-                autoFocus
-                type="email"
-                placeholder="name@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-slack-purple/10 focus:border-slack-purple transition-all"
-              />
-            </div>
-          </div>
-
-          <div className="flex gap-3 mt-8">
-            <button
-              onClick={onClose}
-              className="flex-1 px-6 py-3 border border-gray-200 text-gray-600 font-black rounded-xl hover:bg-gray-50 transition-all active:scale-95 text-sm"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={async () => {
-                if (!email) return;
-                setLoading(true);
-                await onInvite(email);
-                setLoading(false);
-                onClose();
-                setEmail('');
-              }}
-              disabled={loading}
-              className="flex-1 px-6 py-3 bg-slack-purple text-white font-black rounded-xl hover:bg-slack-purple-hover transition-all active:scale-95 text-sm disabled:opacity-50"
-            >
-              {loading ? 'Sending...' : 'Send Invite'}
-            </button>
-          </div>
-        </div>
-      </motion.div>
-    </div>
-  );
-};
 
 // 👇 NAYA: OTP Verification Modal Component
 const DeleteOTPModal = ({ isOpen, channelName, onClose, onConfirm }: { isOpen: boolean, channelName: string, onClose: () => void, onConfirm: (otp: string) => void }) => {
@@ -142,12 +79,13 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showFilters, setShowFilters] = useState(false);
-  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   
   // 👇 NAYE STATES: Delete logic ke liye
   const [channelToDelete, setChannelToDelete] = useState<{id: string, name: string} | null>(null);
 
   const { user: currentUser } = useAuth();
+  const { workspaceId } = useWorkspace();
 
   const fetchData = async () => {
     try {
@@ -155,7 +93,7 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
 
       const [usersRes, channelsRes, invitationsRes] = await Promise.all([
         axios.get('/api/users'),
-        axios.get('/api/channels/all'),
+        axios.get('/api/channels/all', { params: { workspaceId } }),
         axios.get('/api/invitations')
       ]);
 
@@ -172,22 +110,15 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [workspaceId]);
 
-  const handleInvite = async (email: string) => {
-    try {
-      if (!email.trim()) { alert('Please enter an email address'); return; }
-      const response = await axios.post('/api/invitations', { email });
-      await fetchData();
-      if (response.data?.emailError) {
-        alert(`Invitation created, but email failed to send: ${response.data.emailError}\n\nShare the invite link with them instead.`);
-      } else {
-        alert('Invite sent successfully!');
-      }
-    } catch (err: any) {
-      const errorMessage = err?.response?.data?.message || err?.response?.data?.error || err?.message || 'Failed to send invitation';
-      alert(errorMessage);
-    }
+  // InviteMemberModal owns the POST /api/workspaces/:workspaceId/invites call,
+  // its own toasts, and its own loading state — this just needs to reopen the
+  // Invitations list afterward so a freshly-sent invite shows up without a
+  // manual refresh.
+  const closeInviteModal = () => {
+    setIsInviteModalOpen(false);
+    fetchData();
   };
 
   const handleJoinChannel = async (channelId: string) => {
@@ -236,12 +167,21 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
       />
 
       {/* Header */}
-      <div className="h-[49px] border-b border-gray-200 flex items-center px-4 md:px-5 shrink-0 bg-white z-20">
+      <div className="h-[49px] border-b border-gray-200 flex items-center justify-between px-4 md:px-5 shrink-0 bg-white z-20">
         <h1 className="font-black text-base md:text-lg text-gray-900 tracking-tight flex items-center gap-2">
           {activeTab === 'People' && <Users size={18} className="text-gray-400" />}
           {activeTab === 'Channels' && <Hash size={18} className="text-gray-400" />}
           {activeTab}
         </h1>
+        {activeTab === 'People' && (
+          <button
+            onClick={() => setIsInviteModalOpen(true)}
+            className="bg-violet-600 hover:bg-violet-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm flex items-center gap-2 text-sm transition-colors active:scale-95"
+          >
+            <UserPlus size={16} />
+            Invite Members
+          </button>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto slack-scrollbar flex flex-col">
@@ -289,12 +229,12 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
                 <p className="text-blue-100/70 text-sm font-medium max-w-md">Collaborate better with your teammates. Invite them to join #{filteredChannels[0]?.name || 'general'}.</p>
               </div>
             </div>
-            <button onClick={() => setShowInviteModal(true)} className="w-full md:w-auto px-6 py-3 bg-white text-[#1264a3] font-black rounded-xl hover:bg-white/90 transition-all active:scale-95 text-[15px] shadow-xl shadow-black/10 shrink-0">
+            <button onClick={() => setIsInviteModalOpen(true)} className="w-full md:w-auto px-6 py-3 bg-white text-[#1264a3] font-black rounded-xl hover:bg-white/90 transition-all active:scale-95 text-[15px] shadow-xl shadow-black/10 shrink-0">
               Invite people
             </button>
           </motion.div>
 
-          <InviteModal isOpen={showInviteModal} onClose={() => setShowInviteModal(false)} onInvite={handleInvite} />
+          <InviteMemberModal isOpen={isInviteModalOpen} onClose={closeInviteModal} workspaceId={workspaceId} />
 
           {/* Search and Filters Bar */}
           <div className="flex flex-col sm:flex-row gap-3 mb-8">
@@ -428,7 +368,7 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
                       <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-6 text-gray-300"><Mail size={40} /></div>
                       <h3 className="text-xl font-black text-gray-900 mb-2">No pending invitations</h3>
                       <p className="text-gray-500 max-w-sm">When you invite teammates by email, they will appear here until they join.</p>
-                      <button onClick={() => setShowInviteModal(true)} className="mt-6 px-6 py-2 bg-slack-purple text-white font-black rounded-lg transition-all active:scale-95 shadow-lg shadow-purple-900/10">Invite Someone</button>
+                      <button onClick={() => setIsInviteModalOpen(true)} className="mt-6 px-6 py-2 bg-slack-purple text-white font-black rounded-lg transition-all active:scale-95 shadow-lg shadow-purple-900/10">Invite Someone</button>
                     </div>
                   ) : (
                     <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden mt-2 w-full">
@@ -441,7 +381,7 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
                             <div className="col-span-5 md:col-span-6 flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100"><Mail size={14} /></div><span className="font-semibold text-gray-800 text-[13px] md:text-sm truncate">{inv.email}</span></div>
                             <div className="col-span-3 md:col-span-2 flex items-center">{inv.status === 'pending' ? <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] md:text-[11px] font-black bg-amber-50 text-amber-600 border border-amber-200"><Clock size={12} strokeWidth={3} /> PENDING</span> : <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] md:text-[11px] font-black bg-green-50 text-green-600 border border-green-200"><CheckCircle2 size={12} strokeWidth={3} /> ACCEPTED</span>}</div>
                             <div className="col-span-3 md:col-span-3 hidden sm:block text-[13px] text-gray-500 font-medium">{inv.createdAt ? new Date(inv.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Recently'}</div>
-                            <div className="col-span-4 sm:col-span-1 flex justify-end"><button onClick={() => { const joinLink = `${window.location.origin}/join?token=${inv.token}`; navigator.clipboard.writeText(joinLink); alert('Invite link copied to clipboard!'); }} className="p-2 text-gray-400 hover:text-slack-purple hover:bg-slack-purple/10 rounded-lg transition-all opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100" title="Copy Invite Link"><Share2 size={16} /></button></div>
+                            <div className="col-span-4 sm:col-span-1 flex justify-end"><button onClick={() => { const joinLink = `${window.location.origin}/invite/${inv.token}`; navigator.clipboard.writeText(joinLink); toast.success('Invite link copied to clipboard!'); }} className="p-2 text-gray-400 hover:text-slack-purple hover:bg-slack-purple/10 rounded-lg transition-all opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100" title="Copy Invite Link"><Share2 size={16} /></button></div>
                           </div>
                         ))}
                       </div>

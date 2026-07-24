@@ -7,65 +7,294 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+}
+
+enum WorkspaceRole {
+  ADMIN
+  MEMBER
+}
+
 model User {
-  id              String          @id @default(uuid())
-  username        String          @unique
-  email           String          @unique
+  id              String            @id @default(uuid())
+  username        String            @unique
+  email           String            @unique
   password        String
-  channels        Channel[]       @relation("UserCreatedChannels")
+  // Workspace-level role — unifies the old email-heuristic (`isAdminUser`)
+  // and the separate hardcoded admin-login check into one real DB field.
+  // Not to be confused with ChannelMember.role, which is per-channel.
+  role            Role              @default(USER)
+  // Replaces the old isBanned boolean — a suspended user should be able to
+  // be reinstated without an admin needing to reconstruct "was this a ban or
+  // a suspension" from a single flag that could only ever mean "banned".
+  status          UserStatus        @default(ACTIVE)
+  channels        Channel[]         @relation("UserCreatedChannels")
   messages        Message[]
   memberships     ChannelMember[]
-  invitationsSent Invitation[]    @relation("UserInvites")
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  invitationsSent Invitation[]      @relation("UserInvites")
+  reactions       Reaction[]
+  auditLogs       AuditLog[]        @relation("AuditLogActor")
+  ownedWorkspaces Workspace[]       @relation("WorkspaceOwner")
+  workspaces      WorkspaceMember[]
+  notifications   Notification[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+}
+
+// The tenant boundary: every Channel and Invitation now belongs to exactly
+// one Workspace. `slug` is the human-facing identifier (e.g. for a future
+// `/w/<slug>` URL); `ownerId` is distinct from WorkspaceMember's per-member
+// ADMIN/MEMBER role — the owner is *the* workspace creator and can never be
+// removed via the membership-role path (see workspaces.service.ts).
+model Workspace {
+  id          String            @id @default(uuid())
+  name        String
+  slug        String            @unique
+  // The one workspace every authenticated user can see/access regardless of
+  // WorkspaceMember rows (see requireWorkspaceAccess in workspace.middleware.ts
+  // and listWorkspacesForUser below) — distinct from DEFAULT_WORKSPACE_SLUG
+  // (workspaces.service.ts), which only identifies *which* workspace this is
+  // for seeding/backfill purposes. At most one row should ever have this set;
+  // nothing in the schema enforces that, since Prisma has no partial-unique-
+  // index support here — it's upheld by convention (only the seed script sets it).
+  isDefault   Boolean           @default(false)
+  ownerId     String
+  // RESTRICT (default): same reasoning as Channel.creator/Message.sender —
+  // an owner's account being deleted must never silently vaporize their
+  // workspace. Reassign ownerId to the sentinel first if that path is ever
+  // built, same pattern as everywhere else in this schema.
+  owner       User              @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  members     WorkspaceMember[]
+  channels    Channel[]
+  messages    Message[]
+  invitations Invitation[]
+  createdAt   DateTime          @default(now())
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String
+  // Cascade: a WorkspaceMember row has no meaning once its Workspace is gone
+  // — unlike Channel/Message, which get reassigned to a sentinel on user
+  // deletion, there's no "orphaned membership" concept worth preserving.
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  role        WorkspaceRole @default(MEMBER)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([userId, workspaceId])
+  // The unique constraint above indexes (userId, workspaceId) and userId
+  // alone (leftmost prefix) — but not workspaceId by itself, which is
+  // exactly what "list every member of this workspace" needs (workspace
+  // admin panels, member counts, etc.). Without this, that's a full table
+  // scan once WorkspaceMember has any real volume.
+  @@index([workspaceId])
+}
+
+// Immutable trail of admin actions — bans, role changes, deletions. Written
+// best-effort (see lib/auditLog.ts: a logging failure must never block or
+// fail the admin action it's describing), so this is for accountability/
+// review, not a source of truth anything else in the app depends on.
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String
+  // RESTRICT (the default): same reasoning as Message.sender / Channel.creator
+  // — an admin's history must survive their own account being deleted. The
+  // admin delete-user flow reassigns actorId to the "deleted user" sentinel
+  // first (see admin.service.ts), same as it already does for messages/channels.
+  actor      User     @relation("AuditLogActor", fields: [actorId], references: [id])
+  action     String
+  targetType String
+  targetId   String?
+  details    String
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// Temporary holding pen for a sign-up that hasn't proven ownership of its
+// email address yet. No `User` row exists until verify-otp succeeds — this
+// is deliberately a *separate* table, not a flag on User, so an unverified
+// signup can never accidentally behave like a real account (log in, receive
+// messages, etc.) no matter what other code touches the User model.
+model OTPVerification {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  username  String
+  // Already bcrypt-hashed before it ever reaches this table — same as a real
+  // User row, never plaintext.
+  password  String
+  // HMAC-SHA256 of the 6-digit code (see lib/otp.ts), not the raw code — a
+  // DB dump alone shouldn't hand out valid codes for pending signups.
+  otpHash   String
+  attempts  Int      @default(0)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
 }
 
 model Invitation {
-  id        String   @id @default(uuid())
-  email     String
-  token     String   @unique @default(uuid())
-  status    String   @default("pending")
-  inviterId String
-  inviter   User     @relation("UserInvites", fields: [inviterId], references: [id])
-  createdAt DateTime @default(now())
+  id          String    @id @default(uuid())
+  email       String
+  token       String    @unique @default(uuid())
+  status      String    @default("pending")
+  inviterId   String
+  inviter     User      @relation("UserInvites", fields: [inviterId], references: [id], onDelete: Cascade)
+  workspaceId String
+  // Cascade: an invitation to a workspace that no longer exists is void by
+  // definition — nothing should keep it around.
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+
+  // Neither foreign key had an index at all before this — "pending invites
+  // for this workspace" and "invites this user sent" both did a full scan.
+  @@index([workspaceId])
+  @@index([inviterId])
 }
 
 model Channel {
   id          String          @id @default(uuid())
   name        String?
   description String?
+  // Emoji string chosen via emoji-picker-react, or the literal "hash" for
+  // channels using the default lucide Hash icon (also the fallback for any
+  // pre-existing channel created before this field existed).
+  icon        String?         @default("hash")
   isDM        Boolean         @default(false)
   createdBy   String
+  // Deliberately left as the default RESTRICT (not Cascade/SetNull): a
+  // channel's creator being deleted must never silently delete the channel.
+  // The admin delete-user flow reassigns createdBy to a "deleted user"
+  // sentinel *before* deleting the row (see admin.service.ts); anything else
+  // that tries to delete a user directly still gets a safe FK failure.
   creator     User            @relation("UserCreatedChannels", fields: [createdBy], references: [id])
   messages    Message[]
   members     ChannelMember[]
+  workspaceId String
+  // Cascade: the workspace is the tenant boundary — deleting it tears down
+  // every channel (and, transitively, every message/member/reaction) scoped
+  // to it. This is a rare, fully-intentional "delete this whole tenant"
+  // action, not something that happens as a side effect of anything else.
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
+
+  // No index on workspaceId at all before this — every channel-list load
+  // (fires on every workspace switch, i.e. very high frequency) was a full
+  // table scan once Channel has any real volume.
+  @@index([workspaceId])
 }
 
 model Message {
+  id            String         @id @default(uuid())
+  content       String?
+  fileUrl       String?
+  fileName      String?
+  fileType      String?
+  isPinned      Boolean        @default(false)
+  pollData      Json? // 👇 NAYA: Live polls save karne ke liye
+  channelId     String
+  channel       Channel        @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  // Denormalized from `channel.workspaceId` — Message already reaches its
+  // Workspace transitively through Channel, but workspace-scoped queries
+  // (admin analytics, cross-channel message search/moderation) were
+  // otherwise stuck either joining through Channel or pre-fetching a channel
+  // ID list first (see admin.service.ts's getAnalytics). A direct column
+  // makes "every message in workspace X" a single indexed WHERE, at the cost
+  // of an invariant every write path must uphold: this must always equal the
+  // creating message's `channel.workspaceId` (see sockets/messages.handlers.ts).
+  workspaceId   String
+  // Cascade: same reasoning as Channel.workspace — deleting a workspace is
+  // an intentional full-tenant teardown, and a message can't outlive both
+  // the workspace it's denormalized against and (via channelId) its channel.
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  senderId      String
+  // Same reasoning as Channel.creator above: RESTRICT is intentional so
+  // message history can never be silently wiped by a user deletion. The
+  // admin delete-user flow reassigns senderId to the sentinel user first.
+  sender        User           @relation(fields: [senderId], references: [id])
+  parentId      String?
+  parent        Message?       @relation("Thread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies       Message[]      @relation("Thread")
+  // Orphaned column from an abandoned mentions feature — already live in the
+  // DB (two migrations applied there that never made it into this repo).
+  // Declaring it here so schema.prisma matches reality; unused by app code.
+  mentions      String[]       @default([])
+  reactions     Reaction[]
+  notifications Notification[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  // Matches the exact orderBy in messages.service.ts's cursor pagination:
+  // channelId (equality filter), then createdAt+id descending as the
+  // compound tiebreaker sort (id is needed because createdAt alone isn't a
+  // stable order when messages land in the same millisecond — see the
+  // comment in getChannelMessages). Without this, every page is a full scan
+  // of the channel's messages sorted in memory.
+  @@index([channelId, createdAt(sort: Desc), id(sort: Desc)])
+  // Backs the workspace-scoped queries workspaceId was added for — most
+  // recent-first across every channel in a workspace, without a join.
+  @@index([workspaceId, createdAt(sort: Desc)])
+}
+
+model Reaction {
   id        String   @id @default(uuid())
-  content   String?
-  fileUrl   String?
-  fileName  String?
-  fileType  String?
-  isPinned  Boolean  @default(false)
-  pollData  Json?    // 👇 NAYA: Live polls save karne ke liye
-  channelId String
-  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  senderId  String
-  sender    User     @relation(fields: [senderId], references: [id])
-  parentId  String?
-  parent    Message? @relation("Thread", fields: [parentId], references: [id], onDelete: Cascade)
-  replies   Message[] @relation("Thread")
+  emoji     String
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messageId String
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+
+  // One reaction per user per emoji per message (re-clicking the same emoji
+  // toggles it off in app logic rather than inserting a duplicate row).
+  @@unique([userId, messageId, emoji])
+  @@index([messageId])
+}
+
+// Powers @mention alerts, thread-reply alerts, and the sidebar's unread
+// badge. `type` is a plain String (not an enum) on purpose — same reasoning
+// as AuditLog.action above: the set of notification kinds is expected to
+// keep growing (reactions, channel invites, etc.), and a String lets the
+// application layer add a new kind without a schema migration for each one.
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  // Cascade: unlike AuditLog/Message, a notification has no meaning once its
+  // recipient is gone — it's an ephemeral inbox entry, not a historical
+  // record anything else depends on.
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // e.g. "MENTION", "REPLY" — see the model-level comment above.
+  type      String
+  messageId String
+  // Cascade: same reasoning as Reaction.message — a notification pointing at
+  // a message that's been deleted is stale clutter, not something worth
+  // preserving with a dangling reference.
+  message   Message  @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  // Backs "my notifications, newest first" (the whole feed) and, since
+  // isRead is the second column, an efficient unread-only variant of the
+  // same query/count without a second index.
+  @@index([userId, isRead, createdAt(sort: Desc)])
 }
 
 model ChannelMember {
   id        String   @id @default(uuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id])
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   isDM      Boolean  @default(false)
   channelId String
   channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
@@ -74,4 +303,9 @@ model ChannelMember {
   updatedAt DateTime @updatedAt
 
   @@unique([userId, channelId])
+  // Same reasoning as WorkspaceMember.@@index([workspaceId]) above — the
+  // unique constraint covers (userId, channelId) and userId alone, but not
+  // channelId by itself, which is what every "who's in this channel" listing
+  // (channel member includes, addable-members, etc.) actually filters by.
+  @@index([channelId])
 }

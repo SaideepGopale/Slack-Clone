@@ -13,7 +13,7 @@ const createTransporter = () =>
   });
 
 // 1. Send Invite Email Function
-export const sendInviteEmail = async (to: string, inviteLink: string) => {
+export const sendInviteEmail = async (to: string, inviteLink: string, workspaceName: string) => {
   const emailUser = process.env.EMAIL_USER;
   const emailPass = process.env.EMAIL_PASS;
 
@@ -28,11 +28,11 @@ export const sendInviteEmail = async (to: string, inviteLink: string) => {
     const info = await transporter.sendMail({
       from: `"Smart Chat App" <${emailUser}>`,
       to,
-      subject: "You're invited 🚀",
+      subject: `You've been invited to join ${workspaceName}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px;">
-          <h2>Join Smart Chat App</h2>
-          <p>You have been invited to collaborate on our Smart Chat App!</p>
+          <h1>Join your team on ${workspaceName}</h1>
+          <p>You have been invited to collaborate on <strong>${workspaceName}</strong>!</p>
           <p>
             <a href="${inviteLink}" style="display: inline-block; padding: 12px 24px; background-color: #4a154b; color: white; text-decoration: none; border-radius: 8px; font-weight: bold;">
               Accept Invite
@@ -51,7 +51,43 @@ export const sendInviteEmail = async (to: string, inviteLink: string) => {
   }
 };
 
-// 2. Send Reset Password Email Function
+// 2. Send Sign-Up OTP Email Function
+export const sendOtpEmail = async (to: string, code: string) => {
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    // Unlike invites/reset links, there's no fallback way to hand someone a
+    // verification code if the email never sends — fail the signup request
+    // loudly rather than leave them stuck on a code that never arrives.
+    throw new Error('Email service is not configured — cannot send verification codes.');
+  }
+
+  const transporter = createTransporter();
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"Slick Workspace" <${process.env.EMAIL_USER}>`,
+      to,
+      subject: `${code} is your Slick Workspace verification code`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px; border: 1px solid #ece9f4; border-radius: 16px;">
+          <div style="width: 40px; height: 40px; background: #2e1065; border-radius: 10px; color: white; font-weight: bold; font-size: 18px; display: flex; align-items: center; justify-content: center; margin-bottom: 24px;">S</div>
+          <h2 style="color: #111827; margin: 0 0 8px;">Verify your email</h2>
+          <p style="color: #6b7280; font-size: 14px; margin: 0 0 24px;">Enter this code to finish creating your Slick Workspace account. It expires in 5 minutes.</p>
+          <div style="background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px;">
+            <span style="font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #4c1d95;">${code}</span>
+          </div>
+          <p style="color: #9ca3af; font-size: 12px; margin: 0;">If you didn't request this, you can safely ignore this email — no account will be created without this code.</p>
+        </div>
+      `,
+    });
+    console.log('OTP email sent:', info.messageId);
+  } catch (error: any) {
+    console.error('OTP email error:', error.message || error);
+    throw new Error(`Failed to send verification email: ${error.message}`);
+  }
+};
+
+// 3. Send Reset Password Email Function — used by both self-service
+// "forgot password" and the admin "force reset" action.
 export const sendResetPasswordEmail = async (to: string, resetLink: string) => {
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
     console.warn('Email credentials not configured - reset email will not be sent');
@@ -62,14 +98,17 @@ export const sendResetPasswordEmail = async (to: string, resetLink: string) => {
     const transporter = createTransporter();
 
     const info = await transporter.sendMail({
-      from: `"Smart Chat App" <${process.env.EMAIL_USER}>`,
+      from: `"Slick Workspace" <${process.env.EMAIL_USER}>`,
       to,
-      subject: "Reset your Smart Chat App password",
+      subject: 'Password Reset Request - Slick Workspace',
       html: `
-        <h2>Password Reset</h2>
-        <p>We received a request to reset your password. Click the link below to set a new password. The link will expire in one hour.</p>
-        <a href="${resetLink}">${resetLink}</a>
-        <p>If you didn't request this, you can safely ignore this email.</p>
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+          <h2 style="color: #350d36;">Reset Your Password</h2>
+          <p>We received a request to reset your password for your Slick Workspace account.</p>
+          <p>Click the button below to set a new password. This link is valid for <strong>15 minutes</strong>.</p>
+          <a href="${resetLink}" style="display: inline-block; padding: 12px 24px; background-color: #e8912d; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; margin-top: 15px;">Set New Password</a>
+          <p style="margin-top: 25px; font-size: 12px; color: #888;">If you didn't request this, you can safely ignore this email.</p>
+        </div>
       `,
     });
 
