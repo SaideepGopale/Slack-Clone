@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { Hash, RefreshCw, Users } from 'lucide-react';
+import { Hash, Megaphone, RefreshCw, Users } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSocket } from '../../hooks/useSocket';
@@ -37,6 +37,9 @@ export const ChannelManagement = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [broadcastTarget, setBroadcastTarget] = useState<AdminChannel | null>(null);
+  const [broadcastText, setBroadcastText] = useState('');
+  const [broadcasting, setBroadcasting] = useState(false);
 
   const fetchAllChannels = useCallback(async () => {
     try {
@@ -79,6 +82,22 @@ export const ChannelManagement = () => {
   }, [socket]);
 
   const filteredChannels = channels.filter(c => c.name?.toLowerCase().includes(searchTerm.toLowerCase()));
+
+  const handleSendBroadcast = async () => {
+    if (!broadcastTarget || !broadcastText.trim()) return;
+    setBroadcasting(true);
+    try {
+      await axios.post('/api/admin/broadcast', { channelId: broadcastTarget.id, content: broadcastText.trim() });
+      setSuccess(`Broadcast sent to #${broadcastTarget.name}!`);
+      setTimeout(() => setSuccess(null), 3000);
+      setBroadcastTarget(null);
+      setBroadcastText('');
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to send broadcast');
+    } finally {
+      setBroadcasting(false);
+    }
+  };
 
   const handleDeleteChannel = async (channelId: string, channelName: string) => {
     if (channelName.toLowerCase() === 'general') {
@@ -188,11 +207,21 @@ export const ChannelManagement = () => {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-right">
-                    {ch.name?.toLowerCase() !== 'general' ? (
-                      <button onClick={() => handleDeleteChannel(ch.id, ch.name || '')} className="text-red-600 hover:text-red-800">Delete</button>
-                    ) : (
-                      <span className="text-gray-400">Protected</span>
-                    )}
+                    <div className="flex items-center justify-end gap-3">
+                      {!ch.isDM && (
+                        <button
+                          onClick={() => { setBroadcastTarget(ch); setBroadcastText(''); }}
+                          className="text-violet-600 hover:text-violet-800 flex items-center gap-1"
+                        >
+                          <Megaphone size={14} /> Broadcast
+                        </button>
+                      )}
+                      {ch.name?.toLowerCase() !== 'general' ? (
+                        <button onClick={() => handleDeleteChannel(ch.id, ch.name || '')} className="text-red-600 hover:text-red-800">Delete</button>
+                      ) : (
+                        <span className="text-gray-400">Protected</span>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))
@@ -200,6 +229,41 @@ export const ChannelManagement = () => {
           </tbody>
         </table>
       </div>
+
+      {broadcastTarget && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md p-6">
+            <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2 mb-1">
+              <Megaphone size={18} className="text-violet-600" /> Broadcast to #{broadcastTarget.name}
+            </h2>
+            <p className="text-sm text-gray-500 mb-4">Posted instantly as you, visible to everyone in the channel.</p>
+            <textarea
+              autoFocus
+              value={broadcastText}
+              onChange={(e) => setBroadcastText(e.target.value)}
+              rows={4}
+              placeholder="Announcement..."
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 resize-none"
+            />
+            <div className="flex justify-end gap-3 mt-4">
+              <button
+                onClick={() => setBroadcastTarget(null)}
+                disabled={broadcasting}
+                className="px-4 py-2 rounded-lg text-gray-600 hover:bg-gray-100 disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSendBroadcast}
+                disabled={broadcasting || !broadcastText.trim()}
+                className="px-4 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-60"
+              >
+                {broadcasting ? 'Sending...' : 'Send Broadcast'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

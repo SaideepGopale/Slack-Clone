@@ -48,3 +48,12 @@ export const notifyChannelMemberAdded = (targetUserId: string, channel: unknown)
 export const broadcastReactionUpdate = (channelId: string, messageId: string, reactions: unknown) => {
   io?.to(channelId).emit('message:reaction:updated', { messageId, reactions });
 };
+
+// Lets the REST admin-broadcast endpoint (admin.controller.ts) push a newly
+// created announcement message live into the channel, via the exact same
+// event ChatArea already listens for from sockets/messages.handlers.ts's
+// message:send — an admin broadcast shows up instantly with no frontend
+// changes, same reasoning as broadcastReactionUpdate above.
+export const broadcastNewMessage = (channelId: string, message: unknown) => {
+  io?.to(channelId).emit('message:received', message);
+};

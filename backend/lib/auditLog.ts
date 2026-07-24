@@ -10,7 +10,8 @@ export type AuditAction =
   | 'DELETE_CHANNEL'
   | 'DELETE_MESSAGE'
   | 'DELETE_FILE'
-  | 'DELETE_WORKSPACE';
+  | 'DELETE_WORKSPACE'
+  | 'BROADCAST_MESSAGE';
 
 export type AuditTargetType = 'USER' | 'CHANNEL' | 'MESSAGE' | 'FILE' | 'WORKSPACE';
 

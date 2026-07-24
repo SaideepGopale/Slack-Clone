@@ -4,7 +4,7 @@ import * as adminService from './admin.service';
 import * as messagesService from '../messages/messages.service';
 import * as fileStorageService from './fileStorage.service';
 import { logAuditEvent } from '../../lib/auditLog';
-import { broadcastMessageDeleted } from '../../sockets/registry';
+import { broadcastMessageDeleted, broadcastNewMessage } from '../../sockets/registry';
 
 export const adminStatsHandler = async (_req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
@@ -129,5 +129,18 @@ export const deleteUserHandler = async (req: AuthenticatedRequest, res: Response
   try {
     const result = await adminService.deleteUser(req.user!.id, req.params.id);
     res.json(result);
+  } catch (err) { next(err); }
+};
+
+export const broadcastMessageHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const { channelId, content } = req.body;
+    if (!channelId || typeof channelId !== 'string') {
+      return res.status(400).json({ error: 'channelId is required' });
+    }
+
+    const message = await adminService.broadcastMessage(req.user!.id, channelId, content);
+    broadcastNewMessage(channelId, message);
+    res.status(201).json(message);
   } catch (err) { next(err); }
 };

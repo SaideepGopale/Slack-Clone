@@ -6,6 +6,7 @@ import {
   analyticsHandler,
   auditLogsHandler,
   banUserHandler,
+  broadcastMessageHandler,
   deleteFileHandler,
   deleteMessageHandler,
   deleteUserHandler,
@@ -39,5 +40,6 @@ router.patch('/users/:id/status', updateUserStatusHandler);
 router.patch('/users/:id/role', toggleUserRoleHandler);
 router.post('/users/:id/force-reset', forceResetPasswordHandler);
 router.delete('/users/:id', deleteUserHandler);
+router.post('/broadcast', broadcastMessageHandler);
 
 export default router;

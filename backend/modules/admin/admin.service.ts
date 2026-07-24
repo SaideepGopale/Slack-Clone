@@ -6,6 +6,7 @@ import { issuePasswordReset } from '../auth/auth.service';
 import { kickUserSockets } from '../../sockets/registry';
 import { toCsv } from '../../utils/csv';
 import { logAuditEvent } from '../../lib/auditLog';
+import { sanitizeMessageHtml } from '../../lib/sanitize';
 
 class HttpError extends Error {
   status: number;
@@ -282,6 +283,38 @@ export const deleteUser = async (adminId: string, targetUserId: string) => {
   await logAuditEvent(adminId, 'DELETE_USER', 'USER', targetUserId, `Deleted user "${target.username}" (${target.email})`);
 
   return { message: 'User deleted successfully' };
+};
+
+// Posts an announcement into a channel as the admin themselves (not a
+// "System" sentinel — the sender is a real, identifiable account, same as
+// every other message in this app). Reuses the exact validation/sanitize
+// path the live socket message:send handler uses (sockets/messages.handlers.ts),
+// so an admin broadcast can't become a fresh XSS vector just because it
+// skipped the socket layer.
+export const broadcastMessage = async (adminId: string, channelId: string, content: string) => {
+  const trimmed = content?.trim();
+  if (!trimmed) {
+    throw new HttpError(400, 'Broadcast message content is required');
+  }
+
+  const channel = await prisma.channel.findUnique({ where: { id: channelId }, select: { workspaceId: true, name: true } });
+  if (!channel) {
+    throw new HttpError(404, 'Channel not found');
+  }
+
+  const message = await prisma.message.create({
+    data: {
+      content: sanitizeMessageHtml(trimmed),
+      channelId,
+      workspaceId: channel.workspaceId,
+      senderId: adminId,
+    },
+    include: { sender: { select: { id: true, username: true } } },
+  });
+
+  await logAuditEvent(adminId, 'BROADCAST_MESSAGE', 'CHANNEL', channelId, `Broadcast a message to "#${channel.name ?? channelId}"`);
+
+  return message;
 };
 
 export { HttpError };
