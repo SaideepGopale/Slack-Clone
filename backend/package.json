@@ -28,8 +28,8 @@
     "express-rate-limit": "^8.6.0",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.2.0",
-    "nodemailer": "^8.0.11",
     "prisma": "^6.19.3",
+    "resend": "^6.18.0",
     "sanitize-html": "^2.17.6",
     "socket.io": "^4.8.3"
   },
@@ -40,7 +40,6 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/multer": "^2.1.0",
     "@types/node": "^22.14.0",
-    "@types/nodemailer": "^6.4.24",
     "@types/sanitize-html": "^2.16.1",
     "@types/supertest": "^6.0.2",
     "supertest": "^7.0.0",

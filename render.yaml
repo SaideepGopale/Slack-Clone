@@ -47,9 +47,10 @@ services:
         sync: false
       - key: CLOUDINARY_API_SECRET
         sync: false
-      - key: EMAIL_USER
-        sync: false
-      - key: EMAIL_PASS
+      # Gmail SMTP is gone — Render's free tier silently blocks/times-out
+      # outbound SMTP (both 587 and 465), so email now goes through Resend's
+      # HTTP API instead. Paste the API key from resend.com/api-keys here.
+      - key: RESEND_API_KEY
         sync: false
 
   - type: web
