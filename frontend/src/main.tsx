@@ -2,6 +2,7 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import './lib/api';
 
 // Suppress benign Vite/WebSocket rejections in development environment
 if (typeof window !== 'undefined') {

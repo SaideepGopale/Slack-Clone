@@ -3,7 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "node",
-    "ignoreDeprecations": "6.0",
+    "ignoreDeprecations": "5.0",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "strict": true,
@@ -12,6 +12,6 @@
     "rootDir": ".",
     "resolveJsonModule": true
   },
-  "include": ["server.ts", "routes/**/*.ts", "middleware/**/*.ts", "lib/**/*.ts", "utils/**/*.ts"],
+  "include": ["server.ts", "app.ts", "config/**/*.ts", "modules/**/*.ts", "sockets/**/*.ts", "middleware/**/*.ts", "lib/**/*.ts", "utils/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

@@ -20,10 +20,12 @@ export const ActivityView = ({ onSelectChannel, onViewChange }: ActivityViewProp
         const channelsRes = await axios.get('/api/channels');
         const channels = channelsRes.data;
         
-        // Fetch last few messages from each channel
-        const allMessagesRequests = channels.map((c: any) => 
-          axios.get(`/api/channels/${c.id}/messages`).then(res => 
-            res.data.map((m: any) => ({ ...m, channelName: c.name, channel: c }))
+        // Fetch last few messages from each channel. The endpoint is now
+        // cursor-paginated (see backend/modules/messages) — no params here
+        // means "most recent page," which is exactly what this view wants.
+        const allMessagesRequests = channels.map((c: any) =>
+          axios.get(`/api/channels/${c.id}/messages`).then(res =>
+            res.data.messages.map((m: any) => ({ ...m, channelName: c.name, channel: c }))
           )
         );
         
