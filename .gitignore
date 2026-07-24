@@ -9,9 +9,11 @@ build/
 frontend/dist/
 backend/dist/
 
-# Uploads (user-generated files)
+# Uploads (user-generated files) — anchored to repo root so this doesn't
+# also match backend/modules/uploads/, the source folder for the upload
+# feature's code (a bare `uploads/` pattern matches a directory with that
+# name at any depth, not just the runtime storage dir this is meant for).
 backend/uploads/
-uploads/
 
 # Environment files
 .env
