@@ -58,11 +58,36 @@ export const getWorkspaceInviteLinkHandler = async (req: AuthenticatedRequest, r
   } catch (err) { next(err); }
 };
 
-// POST /api/workspaces/join — consumes a reusable invite link for whoever is
-// currently signed in, same trust model as acceptInvitationHandler above.
+// POST /api/workspaces/join — files a join request for whoever is currently
+// signed in, same trust model as acceptInvitationHandler above. Returns
+// status: 'pending' (needs admin approval) or 'already_member' (lets the
+// frontend redirect straight in, same as before this flow required approval).
 export const joinWorkspaceHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const result = await invitationsService.joinWorkspaceViaLink(req.user!.id, req.body.token);
+    const result = await invitationsService.requestToJoinWorkspace(req.user!.id, req.body.token);
+    res.json(result);
+  } catch (err) { next(err); }
+};
+
+// GET /api/workspaces/:workspaceId/requests — admin-only (enforced inside
+// listPendingJoinRequests itself).
+export const listPendingJoinRequestsHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const requests = await invitationsService.listPendingJoinRequests(req.user!.id, req.params.workspaceId);
+    res.json(requests);
+  } catch (err) { next(err); }
+};
+
+// PUT /api/workspaces/:workspaceId/requests/:requestId — admin-only
+// (enforced inside resolveJoinRequest itself).
+export const resolveJoinRequestHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const result = await invitationsService.resolveJoinRequest(
+      req.user!.id,
+      req.params.workspaceId,
+      req.params.requestId,
+      req.body.action
+    );
     res.json(result);
   } catch (err) { next(err); }
 };

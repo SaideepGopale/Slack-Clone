@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { AlertCircle, CheckCircle2, Clock, Filter, Grid, Hash, KeyRound, List as ListIcon, Mail, MoreHorizontal, Search, Share2, ShieldAlert, Trash2, UserPlus, Users } from 'lucide-react';
+import { AlertCircle, Check, CheckCircle2, Clock, Filter, Grid, Hash, KeyRound, List as ListIcon, Mail, MoreHorizontal, Search, Share2, ShieldAlert, Trash2, UserPlus, Users, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useState } from 'react';
 import { toast } from 'react-toastify';
@@ -7,7 +7,14 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useWorkspace } from '../../pages/workspace/WorkspaceContext';
 import { InviteMemberModal } from './InviteMemberModal';
 
-const tabs = ['People', 'Channels', 'User Groups', 'External', 'Invitations'];
+const tabs = ['People', 'Channels', 'User Groups', 'External', 'Invitations', 'Join Requests'];
+
+interface JoinRequest {
+  id: string;
+  status: 'PENDING';
+  createdAt: string;
+  user: { id: string; username: string; email: string };
+}
 
 // 👇 NAYA: OTP Verification Modal Component
 const DeleteOTPModal = ({ isOpen, channelName, onClose, onConfirm }: { isOpen: boolean, channelName: string, onClose: () => void, onConfirm: (otp: string) => void }) => {
@@ -76,16 +83,37 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
   const [users, setUsers] = useState<any[]>([]);
   const [channels, setChannels] = useState<any[]>([]);
   const [invitations, setInvitations] = useState<any[]>([]);
+  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
+  // 403 (not a workspace admin) is an expected, common case here — not a
+  // real error — so it's tracked separately rather than lumped in with
+  // fetchData's console.error path.
+  const [canManageJoinRequests, setCanManageJoinRequests] = useState(true);
+  const [resolvingRequestId, setResolvingRequestId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showFilters, setShowFilters] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
-  
+
   // 👇 NAYE STATES: Delete logic ke liye
   const [channelToDelete, setChannelToDelete] = useState<{id: string, name: string} | null>(null);
 
   const { user: currentUser } = useAuth();
   const { workspaceId } = useWorkspace();
+
+  const fetchJoinRequests = () => {
+    axios.get<JoinRequest[]>(`/api/workspaces/${workspaceId}/requests`)
+      .then((res) => {
+        setJoinRequests(res.data);
+        setCanManageJoinRequests(true);
+      })
+      .catch((err) => {
+        if (err.response?.status === 403) {
+          setCanManageJoinRequests(false);
+        } else {
+          console.error('Failed to fetch join requests', err);
+        }
+      });
+  };
 
   const fetchData = async () => {
     try {
@@ -106,11 +134,27 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
     } finally {
       setLoading(false);
     }
+    // Separate from the Promise.all above on purpose — a 403 here (not a
+    // workspace admin) shouldn't fail the rest of this page's data.
+    fetchJoinRequests();
   };
 
   useEffect(() => {
     fetchData();
   }, [workspaceId]);
+
+  const handleResolveJoinRequest = async (requestId: string, action: 'APPROVE' | 'REJECT') => {
+    setResolvingRequestId(requestId);
+    try {
+      await axios.put(`/api/workspaces/${workspaceId}/requests/${requestId}`, { action });
+      setJoinRequests((prev) => prev.filter((r) => r.id !== requestId));
+      toast.success(action === 'APPROVE' ? 'Request approved — they now have access.' : 'Request rejected.');
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Failed to resolve request.');
+    } finally {
+      setResolvingRequestId(null);
+    }
+  };
 
   // InviteMemberModal owns generating/copying the invite link itself (GET
   // /api/workspaces/:workspaceId/invite-link) — this just refreshes this
@@ -200,6 +244,9 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
                   {tab}
                   {tab === 'Invitations' && invitations.length > 0 && (
                     <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-gray-100 text-[10px] text-gray-500 font-black">{invitations.length}</span>
+                  )}
+                  {tab === 'Join Requests' && joinRequests.length > 0 && (
+                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-[10px] text-amber-700 font-black">{joinRequests.length}</span>
                   )}
                 </button>
               ))}
@@ -381,6 +428,66 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
                             <div className="col-span-3 md:col-span-2 flex items-center">{inv.status === 'pending' ? <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] md:text-[11px] font-black bg-amber-50 text-amber-600 border border-amber-200"><Clock size={12} strokeWidth={3} /> PENDING</span> : <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] md:text-[11px] font-black bg-green-50 text-green-600 border border-green-200"><CheckCircle2 size={12} strokeWidth={3} /> ACCEPTED</span>}</div>
                             <div className="col-span-3 md:col-span-3 hidden sm:block text-[13px] text-gray-500 font-medium">{inv.createdAt ? new Date(inv.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Recently'}</div>
                             <div className="col-span-4 sm:col-span-1 flex justify-end"><button onClick={() => { const joinLink = `${window.location.origin}/invite/${inv.token}`; navigator.clipboard.writeText(joinLink); toast.success('Invite link copied to clipboard!'); }} className="p-2 text-gray-400 hover:text-slack-purple hover:bg-slack-purple/10 rounded-lg transition-all opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100" title="Copy Invite Link"><Share2 size={16} /></button></div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'Join Requests' && (
+                <div className="flex flex-col gap-4">
+                  {!canManageJoinRequests ? (
+                    <div className="flex flex-col items-center justify-center py-20 text-center">
+                      <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-6 text-gray-300"><ShieldAlert size={40} /></div>
+                      <h3 className="text-xl font-black text-gray-900 mb-2">Admins only</h3>
+                      <p className="text-gray-500 max-w-sm">Only a workspace admin can view and resolve join requests.</p>
+                    </div>
+                  ) : joinRequests.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-20 text-center">
+                      <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-6 text-gray-300"><Clock size={40} /></div>
+                      <h3 className="text-xl font-black text-gray-900 mb-2">No pending join requests</h3>
+                      <p className="text-gray-500 max-w-sm">When someone uses your invite link, their request to join will appear here for approval.</p>
+                    </div>
+                  ) : (
+                    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden mt-2 w-full">
+                      <div className="grid grid-cols-12 gap-4 p-4 border-b border-gray-100 bg-gray-50/80 text-[11px] font-black text-gray-500 uppercase tracking-widest">
+                        <div className="col-span-6 md:col-span-5">Person</div>
+                        <div className="col-span-3 hidden sm:block">Requested On</div>
+                        <div className="col-span-6 sm:col-span-4 text-right">Action</div>
+                      </div>
+                      <div className="divide-y divide-gray-100 bg-white">
+                        {joinRequests.map((req) => (
+                          <div key={req.id} className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-gray-50/50 transition-colors">
+                            <div className="col-span-6 md:col-span-5 flex items-center gap-3 min-w-0">
+                              <div className="w-8 h-8 rounded-full bg-violet-50 text-violet-600 flex items-center justify-center shrink-0 border border-violet-100 font-black text-xs">
+                                {req.user.username.substring(0, 1).toUpperCase()}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-semibold text-gray-800 text-[13px] md:text-sm truncate">{req.user.username}</div>
+                                <div className="text-xs text-gray-400 truncate">{req.user.email}</div>
+                              </div>
+                            </div>
+                            <div className="col-span-3 hidden sm:block text-[13px] text-gray-500 font-medium">
+                              {new Date(req.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </div>
+                            <div className="col-span-6 sm:col-span-4 flex justify-end gap-2">
+                              <button
+                                onClick={() => handleResolveJoinRequest(req.id, 'REJECT')}
+                                disabled={resolvingRequestId === req.id}
+                                className="px-3 py-1.5 border border-gray-200 text-gray-600 font-bold rounded-lg hover:border-red-300 hover:text-red-600 hover:bg-red-50 transition-all text-[11px] flex items-center gap-1.5 disabled:opacity-50"
+                              >
+                                <X size={13} /> Reject
+                              </button>
+                              <button
+                                onClick={() => handleResolveJoinRequest(req.id, 'APPROVE')}
+                                disabled={resolvingRequestId === req.id}
+                                className="px-3 py-1.5 bg-slack-purple text-white font-bold rounded-lg hover:bg-purple-800 transition-all text-[11px] flex items-center gap-1.5 disabled:opacity-50"
+                              >
+                                <Check size={13} /> Approve
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>

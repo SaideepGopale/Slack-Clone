@@ -69,39 +69,35 @@ describe('workspace + channel lifecycle', () => {
 });
 
 describe('reusable workspace invite link', () => {
-  it('generates a link (admin only) that a different user can join through', async () => {
-    const owner = await createAndLoginUser();
-    const outsider = await createAndLoginUser();
-
+  const createWorkspaceAndLink = async (ownerToken: string) => {
     const createRes = await request(app)
       .post('/api/workspaces')
-      .set(authHeader(owner.token))
+      .set(authHeader(ownerToken))
       .send({ name: `Invite Link Test ${Date.now()}` });
     const workspaceId = createRes.body.workspace.id;
     const generalChannelId = createRes.body.generalChannel.id;
 
     const linkRes = await request(app)
       .get(`/api/workspaces/${workspaceId}/invite-link`)
+      .set(authHeader(ownerToken));
+    const token = new URL(linkRes.body.url).searchParams.get('token');
+
+    return { workspaceId, generalChannelId, token };
+  };
+
+  it('generates a link (admin only) with the expected /join-workspace shape', async () => {
+    const owner = await createAndLoginUser();
+    const createRes = await request(app)
+      .post('/api/workspaces')
+      .set(authHeader(owner.token))
+      .send({ name: `Invite Link Test ${Date.now()}` });
+    const workspaceId = createRes.body.workspace.id;
+
+    const linkRes = await request(app)
+      .get(`/api/workspaces/${workspaceId}/invite-link`)
       .set(authHeader(owner.token));
     expect(linkRes.status).toBe(200);
     expect(linkRes.body.url).toContain('/join-workspace?token=');
-
-    const token = new URL(linkRes.body.url).searchParams.get('token');
-
-    const joinRes = await request(app)
-      .post('/api/workspaces/join')
-      .set(authHeader(outsider.token))
-      .send({ token });
-    expect(joinRes.status).toBe(200);
-    expect(joinRes.body).toMatchObject({ workspaceId, generalChannelId });
-
-    const channelsRes = await request(app)
-      .get(`/api/workspaces/${workspaceId}/channels`)
-      .set(authHeader(outsider.token));
-    expect(channelsRes.status).toBe(200);
-    expect(channelsRes.body).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: generalChannelId })])
-    );
   });
 
   it('denies generating a link for a non-admin member', async () => {
@@ -126,6 +122,172 @@ describe('reusable workspace invite link', () => {
       .set(authHeader(token))
       .send({ token: 'not-a-real-jwt' });
     expect(res.status).toBe(400);
+  });
+
+  it('files a PENDING join request instead of joining instantly, and denies channel access until approved', async () => {
+    const owner = await createAndLoginUser();
+    const outsider = await createAndLoginUser();
+    const { workspaceId, token } = await createWorkspaceAndLink(owner.token);
+
+    const joinRes = await request(app)
+      .post('/api/workspaces/join')
+      .set(authHeader(outsider.token))
+      .send({ token });
+    expect(joinRes.status).toBe(200);
+    expect(joinRes.body).toEqual({ status: 'pending' });
+
+    const channelsRes = await request(app)
+      .get(`/api/workspaces/${workspaceId}/channels`)
+      .set(authHeader(outsider.token));
+    expect(channelsRes.status).toBe(403);
+  });
+
+  it('re-requesting while already pending is a harmless no-op', async () => {
+    const owner = await createAndLoginUser();
+    const outsider = await createAndLoginUser();
+    const { token } = await createWorkspaceAndLink(owner.token);
+
+    await request(app).post('/api/workspaces/join').set(authHeader(outsider.token)).send({ token });
+    const secondRes = await request(app).post('/api/workspaces/join').set(authHeader(outsider.token)).send({ token });
+    expect(secondRes.status).toBe(200);
+    expect(secondRes.body).toEqual({ status: 'pending' });
+  });
+
+  it('returns already_member for someone who already belongs to the workspace', async () => {
+    const owner = await createAndLoginUser();
+    const { workspaceId, generalChannelId, token } = await createWorkspaceAndLink(owner.token);
+
+    const res = await request(app)
+      .post('/api/workspaces/join')
+      .set(authHeader(owner.token))
+      .send({ token });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'already_member', workspaceId, generalChannelId });
+  });
+});
+
+describe('workspace join request approval', () => {
+  const fileJoinRequest = async (ownerToken: string, requesterToken: string) => {
+    const createRes = await request(app)
+      .post('/api/workspaces')
+      .set(authHeader(ownerToken))
+      .send({ name: `Join Request Test ${Date.now()}` });
+    const workspaceId = createRes.body.workspace.id;
+    const generalChannelId = createRes.body.generalChannel.id;
+
+    const linkRes = await request(app)
+      .get(`/api/workspaces/${workspaceId}/invite-link`)
+      .set(authHeader(ownerToken));
+    const token = new URL(linkRes.body.url).searchParams.get('token');
+
+    await request(app).post('/api/workspaces/join').set(authHeader(requesterToken)).send({ token });
+
+    const listRes = await request(app)
+      .get(`/api/workspaces/${workspaceId}/requests`)
+      .set(authHeader(ownerToken));
+    const requestId = listRes.body[0].id;
+
+    return { workspaceId, generalChannelId, requestId };
+  };
+
+  it('lists pending requests for an admin, including the requester\'s user info', async () => {
+    const owner = await createAndLoginUser();
+    const outsider = await createAndLoginUser();
+    const { workspaceId } = await fileJoinRequest(owner.token, outsider.token);
+
+    const res = await request(app)
+      .get(`/api/workspaces/${workspaceId}/requests`)
+      .set(authHeader(owner.token));
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'PENDING', user: expect.objectContaining({ id: outsider.user.id }) }),
+      ])
+    );
+  });
+
+  it('denies listing requests to a non-admin', async () => {
+    const owner = await createAndLoginUser();
+    const outsider = await createAndLoginUser();
+    const { workspaceId } = await fileJoinRequest(owner.token, outsider.token);
+
+    const res = await request(app)
+      .get(`/api/workspaces/${workspaceId}/requests`)
+      .set(authHeader(outsider.token));
+    expect(res.status).toBe(403);
+  });
+
+  it('APPROVE adds the user to the workspace and its General channel', async () => {
+    const owner = await createAndLoginUser();
+    const outsider = await createAndLoginUser();
+    const { workspaceId, generalChannelId, requestId } = await fileJoinRequest(owner.token, outsider.token);
+
+    const resolveRes = await request(app)
+      .put(`/api/workspaces/${workspaceId}/requests/${requestId}`)
+      .set(authHeader(owner.token))
+      .send({ action: 'APPROVE' });
+    expect(resolveRes.status).toBe(200);
+    expect(resolveRes.body).toEqual({ status: 'APPROVED' });
+
+    const channelsRes = await request(app)
+      .get(`/api/workspaces/${workspaceId}/channels`)
+      .set(authHeader(outsider.token));
+    expect(channelsRes.status).toBe(200);
+    expect(channelsRes.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: generalChannelId })])
+    );
+  });
+
+  it('REJECT leaves the user without access, and the request no longer shows as pending', async () => {
+    const owner = await createAndLoginUser();
+    const outsider = await createAndLoginUser();
+    const { workspaceId, requestId } = await fileJoinRequest(owner.token, outsider.token);
+
+    const resolveRes = await request(app)
+      .put(`/api/workspaces/${workspaceId}/requests/${requestId}`)
+      .set(authHeader(owner.token))
+      .send({ action: 'REJECT' });
+    expect(resolveRes.status).toBe(200);
+    expect(resolveRes.body).toEqual({ status: 'REJECTED' });
+
+    const channelsRes = await request(app)
+      .get(`/api/workspaces/${workspaceId}/channels`)
+      .set(authHeader(outsider.token));
+    expect(channelsRes.status).toBe(403);
+
+    const listRes = await request(app)
+      .get(`/api/workspaces/${workspaceId}/requests`)
+      .set(authHeader(owner.token));
+    expect(listRes.body).toEqual([]);
+  });
+
+  it('rejects resolving an already-resolved request', async () => {
+    const owner = await createAndLoginUser();
+    const outsider = await createAndLoginUser();
+    const { workspaceId, requestId } = await fileJoinRequest(owner.token, outsider.token);
+
+    await request(app)
+      .put(`/api/workspaces/${workspaceId}/requests/${requestId}`)
+      .set(authHeader(owner.token))
+      .send({ action: 'APPROVE' });
+
+    const secondResolve = await request(app)
+      .put(`/api/workspaces/${workspaceId}/requests/${requestId}`)
+      .set(authHeader(owner.token))
+      .send({ action: 'REJECT' });
+    expect(secondResolve.status).toBe(400);
+  });
+
+  it('denies resolving requests to a non-admin', async () => {
+    const owner = await createAndLoginUser();
+    const outsider = await createAndLoginUser();
+    const { workspaceId, requestId } = await fileJoinRequest(owner.token, outsider.token);
+
+    const res = await request(app)
+      .put(`/api/workspaces/${workspaceId}/requests/${requestId}`)
+      .set(authHeader(outsider.token))
+      .send({ action: 'APPROVE' });
+    expect(res.status).toBe(403);
   });
 });
 

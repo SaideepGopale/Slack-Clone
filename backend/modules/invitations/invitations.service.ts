@@ -208,11 +208,12 @@ export const getWorkspaceInviteLink = async (adminId: string, workspaceId: strin
   return { url: `${APP_URL}/join-workspace?token=${token}` };
 };
 
-// Authenticated — consumes the link for whoever is currently signed in,
-// same trust model as acceptInvitation above. No email-match check here
-// (unlike acceptInvitation): this link was never bound to a specific
-// recipient in the first place.
-export const joinWorkspaceViaLink = async (userId: string, token: string) => {
+// Authenticated — files a join request for whoever is currently signed in.
+// No email-match check (unlike acceptInvitation): this link was never bound
+// to a specific recipient in the first place. Deliberately does NOT add the
+// user to WorkspaceMember directly anymore — see resolveJoinRequest, which
+// is the only place that actually happens now, gated on admin approval.
+export const requestToJoinWorkspace = async (userId: string, token: string) => {
   if (!token || typeof token !== 'string') {
     throw new HttpError(400, 'Invalid invite link');
   }
@@ -234,35 +235,100 @@ export const joinWorkspaceViaLink = async (userId: string, token: string) => {
     throw new HttpError(404, 'This workspace no longer exists.');
   }
 
+  // Already a member (e.g. re-clicking an old link, or a previously
+  // approved request) — no need to file another request, just let them
+  // straight in like a normal workspace open.
+  const existingMembership = await prisma.workspaceMember.findUnique({
+    where: { userId_workspaceId: { userId, workspaceId } },
+  });
+  if (existingMembership) {
+    const generalChannel = await prisma.channel.findFirst({
+      where: { name: 'General', isDM: false, workspaceId },
+    });
+    if (!generalChannel) {
+      throw new HttpError(500, 'This workspace has no "General" channel to join — contact an admin.');
+    }
+    return { status: 'already_member' as const, workspaceId, generalChannelId: generalChannel.id };
+  }
+
+  // Upsert rather than a plain create: re-requesting after a REJECTED
+  // decision resets the same row back to PENDING instead of failing on the
+  // @@unique([userId, workspaceId]) constraint or piling up duplicate rows.
+  // Re-requesting while already PENDING is a harmless no-op (same result).
+  await prisma.workspaceJoinRequest.upsert({
+    where: { userId_workspaceId: { userId, workspaceId } },
+    update: { status: 'PENDING' },
+    create: { userId, workspaceId, status: 'PENDING' },
+  });
+
+  return { status: 'pending' as const };
+};
+
+// GET /api/workspaces/:workspaceId/requests — admin only.
+export const listPendingJoinRequests = async (adminId: string, workspaceId: string) => {
+  await assertIsWorkspaceAdmin(adminId, workspaceId);
+
+  return prisma.workspaceJoinRequest.findMany({
+    where: { workspaceId, status: 'PENDING' },
+    include: { user: { select: { id: true, username: true, email: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+};
+
+// PUT /api/workspaces/:workspaceId/requests/:requestId — admin only.
+// APPROVE is the only path that actually creates the WorkspaceMember (+
+// General ChannelMember) row — the reusable link itself no longer does this
+// directly (see requestToJoinWorkspace above).
+export const resolveJoinRequest = async (
+  adminId: string,
+  workspaceId: string,
+  requestId: string,
+  action: 'APPROVE' | 'REJECT'
+) => {
+  await assertIsWorkspaceAdmin(adminId, workspaceId);
+
+  if (action !== 'APPROVE' && action !== 'REJECT') {
+    throw new HttpError(400, 'action must be APPROVE or REJECT');
+  }
+
+  const joinRequest = await prisma.workspaceJoinRequest.findUnique({ where: { id: requestId } });
+  if (!joinRequest || joinRequest.workspaceId !== workspaceId) {
+    throw new HttpError(404, 'Join request not found');
+  }
+  if (joinRequest.status !== 'PENDING') {
+    throw new HttpError(400, 'This request has already been resolved.');
+  }
+
+  if (action === 'REJECT') {
+    const rejected = await prisma.workspaceJoinRequest.update({
+      where: { id: requestId },
+      data: { status: 'REJECTED' },
+    });
+    return { status: rejected.status };
+  }
+
   const generalChannel = await prisma.channel.findFirst({
     where: { name: 'General', isDM: false, workspaceId },
   });
   if (!generalChannel) {
-    throw new HttpError(500, 'This workspace has no "General" channel to join — contact an admin.');
+    throw new HttpError(500, 'This workspace has no "General" channel to add the user to — contact an admin.');
   }
 
-  try {
-    await prisma.$transaction([
-      prisma.workspaceMember.upsert({
-        where: { userId_workspaceId: { userId, workspaceId } },
-        update: {},
-        create: { userId, workspaceId, role: 'MEMBER' },
-      }),
-      prisma.channelMember.upsert({
-        where: { userId_channelId: { userId, channelId: generalChannel.id } },
-        update: {},
-        create: { userId, channelId: generalChannel.id, role: 'member' },
-      }),
-    ]);
-  } catch (err) {
-    // Same benign race as acceptInvitation above (P2002 on a near-simultaneous
-    // double-click/StrictMode double-fire) — the rows exist regardless of
-    // which call "won", so this is a no-op success, not a real failure.
-    const isDuplicateRace = err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
-    if (!isDuplicateRace) throw err;
-  }
+  await prisma.$transaction([
+    prisma.workspaceJoinRequest.update({ where: { id: requestId }, data: { status: 'APPROVED' } }),
+    prisma.workspaceMember.upsert({
+      where: { userId_workspaceId: { userId: joinRequest.userId, workspaceId } },
+      update: {},
+      create: { userId: joinRequest.userId, workspaceId, role: 'MEMBER' },
+    }),
+    prisma.channelMember.upsert({
+      where: { userId_channelId: { userId: joinRequest.userId, channelId: generalChannel.id } },
+      update: {},
+      create: { userId: joinRequest.userId, channelId: generalChannel.id, role: 'member' },
+    }),
+  ]);
 
-  return { workspaceId, generalChannelId: generalChannel.id };
+  return { status: 'APPROVED' as const };
 };
 
 export { HttpError };

@@ -6,6 +6,8 @@ import {
   createWorkspaceInviteHandler,
   getWorkspaceInviteLinkHandler,
   joinWorkspaceHandler,
+  listPendingJoinRequestsHandler,
+  resolveJoinRequestHandler,
 } from '../invitations/invitations.controller';
 import { createWorkspaceHandler, deleteWorkspaceHandler, listWorkspacesHandler } from './workspaces.controller';
 
@@ -26,6 +28,9 @@ router.get('/:workspaceId/dms', authenticate, requireWorkspaceAccess, listDMsFor
 router.post('/:workspaceId/invites', authenticate, createWorkspaceInviteHandler);
 // Same admin-only enforcement, inside getWorkspaceInviteLink itself.
 router.get('/:workspaceId/invite-link', authenticate, getWorkspaceInviteLinkHandler);
+// Same admin-only enforcement, inside listPendingJoinRequests/resolveJoinRequest.
+router.get('/:workspaceId/requests', authenticate, listPendingJoinRequestsHandler);
+router.put('/:workspaceId/requests/:requestId', authenticate, resolveJoinRequestHandler);
 // Owner-or-admin enforcement happens inside deleteWorkspace itself, same
 // reasoning as the invite route above.
 router.delete('/:workspaceId', authenticate, deleteWorkspaceHandler);

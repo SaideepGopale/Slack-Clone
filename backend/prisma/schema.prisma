@@ -23,6 +23,12 @@ enum WorkspaceRole {
   MEMBER
 }
 
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 model User {
   id              String            @id @default(uuid())
   username        String            @unique
@@ -53,6 +59,7 @@ model User {
   // to block deleting the workspace itself or the user.
   lastActiveWorkspaceId String?
   lastActiveWorkspace   Workspace?        @relation("UserLastActiveWorkspace", fields: [lastActiveWorkspaceId], references: [id], onDelete: SetNull)
+  joinRequests    WorkspaceJoinRequest[]
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
 }
@@ -90,6 +97,7 @@ model Workspace {
   // (Prisma requires the back-relation to be declared), but deleting this
   // workspace SetNulls all of these via the FK above.
   usersLastActiveHere User[] @relation("UserLastActiveWorkspace")
+  joinRequests WorkspaceJoinRequest[]
 }
 
 model WorkspaceMember {
@@ -112,6 +120,32 @@ model WorkspaceMember {
   // admin panels, member counts, etc.). Without this, that's a full table
   // scan once WorkspaceMember has any real volume.
   @@index([workspaceId])
+}
+
+// Gates the reusable invite link (workspaces.routes.ts's /invite-link,
+// /join) behind admin approval — clicking the link no longer joins
+// instantly, it files one of these as PENDING for a workspace admin to
+// approve/reject (see invitations.service.ts's requestToJoinWorkspace /
+// resolveJoinRequest). One row per (user, workspace): re-requesting after a
+// REJECTED resets the same row to PENDING rather than piling up duplicates.
+model WorkspaceJoinRequest {
+  id          String            @id @default(uuid())
+  userId      String
+  // Cascade: a pending/resolved request has no meaning once the requesting
+  // account is gone.
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String
+  // Cascade: same tenant-boundary reasoning as every other workspace-scoped
+  // model here — deleting the workspace clears out its request queue too.
+  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  status      JoinRequestStatus @default(PENDING)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@unique([userId, workspaceId])
+  // Backs "list pending requests for this workspace" — the admin-facing
+  // query this whole model exists for.
+  @@index([workspaceId, status])
 }
 
 // Immutable trail of admin actions — bans, role changes, deletions. Written
