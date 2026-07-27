@@ -675,9 +675,14 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
               <Reply size={18} />
             </button>
           )}
-          {/* Cannot edit Polls */}
-          {!isPoll && (
-            <button 
+          {/* Cannot edit Polls. Backend already rejects an edit/delete from
+              anyone but the sender (message:edit/message:delete in
+              sockets/messages.handlers.ts silently no-op on a mismatch) —
+              hiding these for a non-owner here isn't the real security
+              boundary, it just avoids showing a button that would otherwise
+              do nothing with no feedback when clicked. */}
+          {!isPoll && m.senderId === user?.id && (
+            <button
               onClick={() => setEditingId(m.id)}
               className="p-2.5 hover:bg-green-50 rounded-lg text-gray-600 hover:text-green-600 transition-all"
               title="Edit message"
@@ -685,13 +690,15 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
               <Pencil size={18} />
             </button>
           )}
-          <button 
-            onClick={() => handleDelete(m.id)} 
-            className="p-2.5 hover:bg-red-50 text-gray-600 hover:text-red-600 rounded-lg transition-all"
-            title="Delete message"
-          >
-            <Trash2 size={18} />
-          </button>
+          {m.senderId === user?.id && (
+            <button
+              onClick={() => handleDelete(m.id)}
+              className="p-2.5 hover:bg-red-50 text-gray-600 hover:text-red-600 rounded-lg transition-all"
+              title="Delete message"
+            >
+              <Trash2 size={18} />
+            </button>
+          )}
         </div>
       </div>
     );
