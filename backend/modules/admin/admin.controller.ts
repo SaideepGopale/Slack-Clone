@@ -77,8 +77,8 @@ export const listFilesHandler = async (_req: AuthenticatedRequest, res: Response
 
 export const deleteFileHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const result = await fileStorageService.deleteStoredFile(req.params.filename);
-    if (result.status === 'invalid') return res.status(400).json({ error: 'Invalid filename' });
+    const result = await fileStorageService.deleteStoredFile(req.params.publicId);
+    if (result.status === 'invalid') return res.status(400).json({ error: 'Invalid file id' });
     if (result.status === 'not_found') return res.status(404).json({ error: 'File not found' });
 
     if (result.channelId && result.messageId) {
@@ -88,8 +88,8 @@ export const deleteFileHandler = async (req: AuthenticatedRequest, res: Response
       req.user!.id,
       'DELETE_FILE',
       'FILE',
-      req.params.filename,
-      `Deleted file "${req.params.filename}"${result.messageId ? ' (and its attached message)' : ''}`
+      req.params.publicId,
+      `Deleted file "${req.params.publicId}"${result.messageId ? ' (and its attached message)' : ''}`
     );
 
     res.json({ message: 'File deleted successfully' });

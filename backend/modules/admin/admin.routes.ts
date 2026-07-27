@@ -34,7 +34,7 @@ router.get('/export/channels', exportChannelsHandler);
 router.get('/messages/search', searchMessagesHandler);
 router.delete('/messages/:id', deleteMessageHandler);
 router.get('/files', listFilesHandler);
-router.delete('/files/:filename', deleteFileHandler);
+router.delete('/files/:publicId', deleteFileHandler);
 router.post('/users/:id/ban', banUserHandler);
 router.patch('/users/:id/status', updateUserStatusHandler);
 router.patch('/users/:id/role', toggleUserRoleHandler);

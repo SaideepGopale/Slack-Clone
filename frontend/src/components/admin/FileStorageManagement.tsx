@@ -3,7 +3,7 @@ import { File, Hash, HardDrive, Loader2, RefreshCw, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react';
 
 interface StoredFile {
-  filename: string;
+  publicId: string;
   url: string;
   sizeBytes: number;
   modifiedAt: string;
@@ -25,10 +25,15 @@ const formatBytes = (bytes: number): string => {
   return `${value.toFixed(value < 10 ? 2 : 1)} ${units[unitIndex]}`;
 };
 
+// publicId is "workspace-uploads/<sanitized-name>-<timestamp>[.ext]" (see
+// buildPublicId in upload.middleware.ts) — strip the folder prefix for
+// display, the full id is still what's sent to the delete endpoint.
+const displayName = (publicId: string) => publicId.split('/').pop() ?? publicId;
+
 export const FileStorageManagement = () => {
   const [files, setFiles] = useState<StoredFile[]>([]);
   const [loading, setLoading] = useState(true);
-  const [deletingFilename, setDeletingFilename] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -56,19 +61,19 @@ export const FileStorageManagement = () => {
 
   const handleDelete = async (file: StoredFile) => {
     const warning = file.messageId
-      ? `Delete "${file.filename}"? This will also delete the message it's attached to in #${file.channelName ?? 'a channel'}.`
-      : `Permanently delete "${file.filename}" from disk?`;
+      ? `Delete "${displayName(file.publicId)}"? This will also delete the message it's attached to in #${file.channelName ?? 'a channel'}.`
+      : `Permanently delete "${displayName(file.publicId)}" from Cloudinary?`;
     if (!confirm(warning)) return;
 
-    setDeletingFilename(file.filename);
+    setDeletingId(file.publicId);
     try {
-      await axios.delete(`/api/admin/files/${encodeURIComponent(file.filename)}`);
-      setFiles(prev => prev.filter(f => f.filename !== file.filename));
+      await axios.delete(`/api/admin/files/${encodeURIComponent(file.publicId)}`);
+      setFiles(prev => prev.filter(f => f.publicId !== file.publicId));
       flash(setSuccess, 'File deleted');
     } catch (err: any) {
       flash(setError, err.response?.data?.error || 'Failed to delete file');
     } finally {
-      setDeletingFilename(null);
+      setDeletingId(null);
     }
   };
 
@@ -85,7 +90,7 @@ export const FileStorageManagement = () => {
             File Storage
           </h1>
           <p className="text-gray-600 font-medium text-sm mt-2">
-            {files.length} file{files.length === 1 ? '' : 's'} on disk · {formatBytes(totalSize)} total
+            {files.length} file{files.length === 1 ? '' : 's'} in Cloudinary · {formatBytes(totalSize)} total
           </p>
         </div>
         <button
@@ -132,14 +137,21 @@ export const FileStorageManagement = () => {
                 </tr>
               ) : (
                 files.map((file) => (
-                  <tr key={file.filename} className="hover:bg-gray-50 transition-colors group">
+                  <tr key={file.publicId} className="hover:bg-gray-50 transition-colors group">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3 min-w-0">
                         <div className="w-10 h-10 rounded-lg bg-violet-50 border border-violet-100 flex items-center justify-center text-violet-500 shrink-0">
                           <File size={18} />
                         </div>
                         <div className="min-w-0">
-                          <div className="text-sm font-semibold text-gray-900 truncate max-w-xs">{file.filename}</div>
+                          <a
+                            href={file.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-sm font-semibold text-gray-900 truncate max-w-xs block hover:text-violet-600 hover:underline"
+                          >
+                            {displayName(file.publicId)}
+                          </a>
                           {file.senderUsername && <div className="text-xs text-gray-400">by {file.senderUsername}</div>}
                         </div>
                       </div>
@@ -162,11 +174,11 @@ export const FileStorageManagement = () => {
                     <td className="px-6 py-4 text-right">
                       <button
                         onClick={() => handleDelete(file)}
-                        disabled={deletingFilename === file.filename}
+                        disabled={deletingId === file.publicId}
                         className="p-2.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all disabled:opacity-50"
                         title="Delete file"
                       >
-                        {deletingFilename === file.filename ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
+                        {deletingId === file.publicId ? <Loader2 size={16} className="animate-spin" /> : <Trash2 size={16} />}
                       </button>
                     </td>
                   </tr>

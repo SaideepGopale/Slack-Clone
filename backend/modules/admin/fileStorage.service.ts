@@ -1,10 +1,8 @@
-import fs from 'fs';
-import path from 'path';
+import { v2 as cloudinary } from 'cloudinary';
 import { prisma } from '../../lib/prisma';
-import { uploadDir } from '../uploads/storage.service';
 
 export interface StoredFileInfo {
-  filename: string;
+  publicId: string;
   url: string;
   sizeBytes: number;
   modifiedAt: string;
@@ -14,27 +12,52 @@ export interface StoredFileInfo {
   senderUsername: string | null;
 }
 
-// Reads straight from disk rather than a `fileSize` DB column — uploads
-// never persisted a size (see uploads.routes.ts), and stat-ing the real file
-// is simpler and can't drift from reality the way a cached column could.
+// Must match upload.middleware.ts's CloudinaryStorage engine, which uploads
+// everything under this folder.
+const CLOUDINARY_FOLDER = 'workspace-uploads';
+
+// Uploads go in with resource_type: 'auto' (see upload.middleware.ts), which
+// Cloudinary internally routes into one of these three — but its Admin API
+// only ever lists one resource_type per call, never all of them at once, so
+// listing "everything in the folder" means asking three times and merging.
+const RESOURCE_TYPES = ['image', 'video', 'raw'] as const;
+
+interface CloudinaryResource {
+  public_id: string;
+  secure_url: string;
+  bytes: number;
+  created_at: string;
+}
+
+// Previously read from local disk (fs.readdir on the old multer diskStorage
+// uploadDir) — stale ever since uploads moved to streaming straight into
+// Cloudinary (upload.middleware.ts), which never touches local disk at all.
+// That made this page always report 0 files regardless of what had actually
+// been uploaded. Cloudinary's own Admin API is the real source of truth now.
 export const listStoredFiles = async (): Promise<StoredFileInfo[]> => {
-  const filenames = await fs.promises.readdir(uploadDir);
-
-  const fileStats = await Promise.all(
-    filenames.map(async (filename) => {
-      const fullPath = path.join(uploadDir, filename);
-      const stat = await fs.promises.stat(fullPath);
-      if (!stat.isFile()) return null;
-      return { filename, sizeBytes: stat.size, modifiedAt: stat.mtime };
-    })
+  const resourceLists = await Promise.all(
+    RESOURCE_TYPES.map((resource_type) =>
+      cloudinary.api
+        .resources({
+          type: 'upload',
+          resource_type,
+          prefix: `${CLOUDINARY_FOLDER}/`,
+          max_results: 500,
+        })
+        .catch((err: unknown) => {
+          console.error(`Failed to list Cloudinary ${resource_type} resources:`, err);
+          return { resources: [] as CloudinaryResource[] };
+        })
+    )
   );
-  const validFiles = fileStats.filter((f): f is NonNullable<typeof f> => f !== null);
 
-  // Cross-reference with Message rows (matched by the exact /uploads/<file>
-  // URL multer generates — see uploads.routes.ts) so the admin can see which
-  // channel/sender a file belongs to, and so deleting it can cascade to the
-  // message that references it.
-  const urls = validFiles.map((f) => `/uploads/${f.filename}`);
+  const allResources = resourceLists.flatMap((r) => r.resources as CloudinaryResource[]);
+
+  // Cross-reference with Message rows (matched by the exact secure_url
+  // Cloudinary returned at upload time — see upload.middleware.ts) so the
+  // admin can see which channel/sender a file belongs to, and so deleting it
+  // can cascade to the message that references it.
+  const urls = allResources.map((r) => r.secure_url);
   const messages = await prisma.message.findMany({
     where: { fileUrl: { in: urls } },
     select: {
@@ -47,15 +70,14 @@ export const listStoredFiles = async (): Promise<StoredFileInfo[]> => {
   });
   const messageByUrl = new Map(messages.map((m) => [m.fileUrl!, m]));
 
-  return validFiles
-    .map((f) => {
-      const url = `/uploads/${f.filename}`;
-      const message = messageByUrl.get(url);
+  return allResources
+    .map((r) => {
+      const message = messageByUrl.get(r.secure_url);
       return {
-        filename: f.filename,
-        url,
-        sizeBytes: f.sizeBytes,
-        modifiedAt: f.modifiedAt.toISOString(),
+        publicId: r.public_id,
+        url: r.secure_url,
+        sizeBytes: r.bytes,
+        modifiedAt: r.created_at,
         messageId: message?.id ?? null,
         channelId: message?.channelId ?? null,
         channelName: message?.channel.name ?? null,
@@ -70,29 +92,40 @@ export type DeleteFileResult =
   | { status: 'invalid' }
   | { status: 'deleted'; channelId: string | null; messageId: string | null };
 
-export const deleteStoredFile = async (rawFilename: string): Promise<DeleteFileResult> => {
-  // path.basename strips any directory components — if the sanitized name
-  // doesn't match the raw input, the caller tried a path-traversal filename
-  // (e.g. "../../../etc/passwd"); reject rather than silently "fix" it.
-  const filename = path.basename(rawFilename);
-  if (!filename || filename !== rawFilename) {
+export const deleteStoredFile = async (publicId: string): Promise<DeleteFileResult> => {
+  // publicId only ever comes from what listStoredFiles itself returned
+  // (real Cloudinary ids, always prefixed with our upload folder) — reject
+  // anything that doesn't look like one rather than handing an arbitrary
+  // string straight to Cloudinary's destroy API.
+  if (!publicId || typeof publicId !== 'string' || !publicId.startsWith(`${CLOUDINARY_FOLDER}/`)) {
     return { status: 'invalid' };
   }
 
-  const fullPath = path.join(uploadDir, filename);
-  if (!fs.existsSync(fullPath)) {
+  // destroy() needs the correct resource_type or it reports "not found" even
+  // for a real asset — try each until one actually deletes something.
+  let deleted = false;
+  for (const resource_type of RESOURCE_TYPES) {
+    const result = await cloudinary.uploader.destroy(publicId, { resource_type }).catch(() => null);
+    if (result?.result === 'ok') {
+      deleted = true;
+      break;
+    }
+  }
+  if (!deleted) {
     return { status: 'not_found' };
   }
 
-  const url = `/uploads/${filename}`;
-  const message = await prisma.message.findFirst({ where: { fileUrl: url } });
-
-  await fs.promises.unlink(fullPath);
+  // The delivery URL embeds the public_id verbatim (see buildPublicId in
+  // upload.middleware.ts), so a substring match reliably finds the message
+  // that referenced this exact upload without needing to reconstruct the
+  // full secure_url (which would require knowing the resource_type/format
+  // Cloudinary picked, not just the public_id).
+  const message = await prisma.message.findFirst({ where: { fileUrl: { contains: publicId } } });
 
   if (message) {
     // A file exposed through this tool that's still attached to a message
     // gets the whole message removed too — leaving it behind with a dead
-    // fileUrl would just turn "reclaim disk space" into "show everyone a
+    // fileUrl would just turn "reclaim storage" into "show everyone a
     // broken attachment forever."
     await prisma.message.delete({ where: { id: message.id } });
     return { status: 'deleted', channelId: message.channelId, messageId: message.id };
