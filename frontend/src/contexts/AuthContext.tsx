@@ -11,6 +11,14 @@ interface AuthContextType {
     password: string
   ) => Promise<void>;
 
+  // Direct, single-step signup — active path right now (no email/OTP
+  // round-trip). Creates the account and hydrates the session immediately.
+  signup: (
+    username: string,
+    email: string,
+    password: string
+  ) => Promise<void>;
+
   // Step 1 of sign-up: requests an email OTP. No session exists yet — the
   // account isn't created until verifySignupOtp succeeds.
   requestSignupOtp: (
@@ -190,6 +198,23 @@ export const AuthProvider: React.FC<{
     setUser(newUser);
   };
 
+  const signup = async (
+    username: string,
+    email: string,
+    password: string
+  ) => {
+    const res = await axios.post<{
+      token: string;
+      user: User;
+    }>('/api/auth/signup', {
+      username,
+      email,
+      password,
+    });
+
+    hydrateSession(res.data.token, res.data.user);
+  };
+
   const requestSignupOtp = async (
     username: string,
     email: string,
@@ -252,6 +277,7 @@ export const AuthProvider: React.FC<{
         user,
         token,
         login,
+        signup,
         requestSignupOtp,
         verifySignupOtp,
         forgotPassword,

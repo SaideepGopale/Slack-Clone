@@ -16,6 +16,19 @@ export const signupRequestLimiter = rateLimit({
   message: { error: 'Too many verification codes requested. Please try again later.' },
 });
 
+// Direct signup (/signup) doesn't send an email like signup-request does,
+// but account creation itself is still cheap to spam (DB rows, downstream
+// workspace/channel joins) — separate limiter/counter from
+// signupRequestLimiter so usage of one path can't exhaust the other's budget
+// for the same IP.
+export const directSignupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many signup attempts. Please try again later.' },
+});
+
 // Verify-otp already has its own per-code attempt cap (MAX_OTP_ATTEMPTS in
 // lib/otp.ts), but that resets every time a new code is requested — this
 // caps the *rate* of verification attempts across codes too, so someone

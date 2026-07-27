@@ -71,6 +71,52 @@ const joinGeneralChannel = async (tx: Prisma.TransactionClient, userId: string):
 };
 
 /**
+ * Direct, single-step signup — creates the account immediately with no
+ * email/OTP round-trip. Added as a stopgap while email delivery isn't
+ * reliably reachable in production (see mailer.ts); the OTP flow below
+ * (requestSignupOtp/verifySignupOtp) is left fully intact and still works
+ * once that's resolved, this just isn't the path AuthForm.tsx calls right
+ * now. Same validation/hashing/default-workspace-join as the OTP path's
+ * second step, minus the email round-trip.
+ */
+export const signup = async (username: string, email: string, password: string) => {
+  if (!username || !email || !password) {
+    throw new HttpError(400, 'username, email and password are required');
+  }
+  if (!EMAIL_REGEX.test(email)) {
+    throw new HttpError(400, 'Invalid email format');
+  }
+  if (password.length < 6) {
+    throw new HttpError(400, 'Password must be at least 6 characters long');
+  }
+
+  const existingUser = await prisma.user.findFirst({ where: { OR: [{ email }, { username }] } });
+  if (existingUser) {
+    throw new HttpError(400, 'A user with this email or username already exists');
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 12);
+
+  const user = await prisma.$transaction(async (tx) => {
+    const newUser = await tx.user.create({ data: { username, email, password: hashedPassword } });
+    const defaultWorkspaceId = await joinGeneralChannel(tx, newUser.id);
+    return { ...newUser, lastActiveWorkspaceId: defaultWorkspaceId };
+  });
+
+  const token = signToken({ id: user.id, username: user.username, role: user.role });
+  return {
+    token,
+    user: {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      lastActiveWorkspaceId: user.lastActiveWorkspaceId,
+    },
+  };
+};
+
+/**
  * Step 1 of sign-up: validates input, hashes the password, generates a code,
  * and stores everything in OTPVerification — no `User` row is created here.
  * `email` is `@unique` on that table, so this doubles as the "resend" path:

@@ -73,6 +73,46 @@ describe('signup -> verify -> login -> me', () => {
   });
 });
 
+describe('direct signup (no OTP)', () => {
+  it('creates an account and issues a working token with no email round-trip', async () => {
+    const email = uniqueEmail();
+    const username = uniqueUsername();
+    const password = 'Password123!';
+
+    const res = await request(app).post('/api/auth/signup').send({ username, email, password });
+    expect(res.status).toBe(201);
+    expect(res.body.token).toBeTruthy();
+    expect(res.body.user).toMatchObject({ username, email, role: 'USER' });
+    expect(mockedSendOtpEmail).not.toHaveBeenCalled();
+
+    const meRes = await request(app).get('/api/auth/me').set(authHeader(res.body.token));
+    expect(meRes.status).toBe(200);
+    expect(meRes.body).toMatchObject({ username, email });
+
+    const loginRes = await request(app).post('/api/auth/login').send({ email, password });
+    expect(loginRes.status).toBe(200);
+  });
+
+  it('rejects a duplicate email the same as the OTP path does', async () => {
+    const email = uniqueEmail();
+    const username = uniqueUsername();
+    const password = 'Password123!';
+
+    await request(app).post('/api/auth/signup').send({ username, email, password });
+    const res = await request(app)
+      .post('/api/auth/signup')
+      .send({ username: uniqueUsername(), email, password });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a too-short password', async () => {
+    const res = await request(app)
+      .post('/api/auth/signup')
+      .send({ username: uniqueUsername(), email: uniqueEmail(), password: '123' });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('login', () => {
   it('rejects an unknown email', async () => {
     const res = await request(app).post('/api/auth/login').send({ email: uniqueEmail(), password: 'whatever123' });

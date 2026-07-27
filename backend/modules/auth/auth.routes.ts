@@ -1,19 +1,25 @@
 import { Router } from 'express';
 import { authenticate } from '../../middleware/auth.middleware';
-import { loginLimiter, signupRequestLimiter, verifyOtpLimiter } from '../../middleware/rateLimit.middleware';
+import { directSignupLimiter, loginLimiter, signupRequestLimiter, verifyOtpLimiter } from '../../middleware/rateLimit.middleware';
 import {
   forgotPasswordHandler,
   loginHandler,
   meHandler,
   resetPasswordHandler,
+  signupHandler,
   signupRequestHandler,
   verifyOtpHandler,
 } from './auth.controller';
 
 const router = Router();
 
-// The old single-step POST /register is gone — an unverified-email sign-up
-// path can't coexist with the OTP flow below, or it'd just be a bypass.
+// /signup is a direct, unverified-email path — reintroduced deliberately (see
+// auth.service.ts's signup) as a stopgap while production email delivery
+// isn't reachable. AuthForm.tsx calls this one right now. /signup-request +
+// /verify-otp below are left fully working for whenever email delivery is
+// fixed and email verification is worth re-enabling — not dead code, just
+// not the active path.
+router.post('/signup', directSignupLimiter, signupHandler);
 router.post('/signup-request', signupRequestLimiter, signupRequestHandler);
 router.post('/verify-otp', verifyOtpLimiter, verifyOtpHandler);
 

@@ -2,6 +2,14 @@ import { Response, NextFunction } from 'express';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import * as authService from './auth.service';
 
+export const signupHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const { username, email, password } = req.body;
+    const result = await authService.signup(username, email, password);
+    res.status(201).json(result);
+  } catch (err) { next(err); }
+};
+
 export const signupRequestHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const { username, email, password } = req.body;
