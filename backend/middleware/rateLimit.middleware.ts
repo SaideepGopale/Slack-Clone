@@ -6,6 +6,13 @@ import rateLimit from 'express-rate-limit';
 // Message-send/reactions still have no rate limiting — a separate, lower-
 // priority gap than "anyone can brute-force any account's password."
 
+// The integration test suite drives these same endpoints many times per run
+// from one process (one shared IP, from these limiters' point of view) —
+// legitimate rapid-fire test traffic, not the abuse these limiters exist to
+// catch. Skipped only when NODE_ENV=test (set by tests/setup.ts), never in
+// production.
+const skipInTests = () => process.env.NODE_ENV === 'test';
+
 // Signup-request sends a real email per call — the abuse case is either
 // spamming someone else's inbox or burning through email-provider quota.
 export const signupRequestLimiter = rateLimit({
@@ -13,6 +20,7 @@ export const signupRequestLimiter = rateLimit({
   limit: 5,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: skipInTests,
   message: { error: 'Too many verification codes requested. Please try again later.' },
 });
 
@@ -26,6 +34,7 @@ export const directSignupLimiter = rateLimit({
   limit: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: skipInTests,
   message: { error: 'Too many signup attempts. Please try again later.' },
 });
 
@@ -39,6 +48,7 @@ export const verifyOtpLimiter = rateLimit({
   limit: 15,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: skipInTests,
   message: { error: 'Too many verification attempts. Please try again later.' },
 });
 
@@ -52,5 +62,6 @@ export const loginLimiter = rateLimit({
   limit: 10,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: skipInTests,
   message: { error: 'Too many login attempts. Please try again later.' },
 });

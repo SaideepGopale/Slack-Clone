@@ -47,3 +47,22 @@ export const acceptInvitationHandler = async (req: AuthenticatedRequest, res: Re
     res.json(result);
   } catch (err) { next(err); }
 };
+
+// GET /api/workspaces/:workspaceId/invite-link — admin-only (enforced inside
+// getWorkspaceInviteLink itself, same pattern as createWorkspaceInviteHandler
+// above).
+export const getWorkspaceInviteLinkHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const result = await invitationsService.getWorkspaceInviteLink(req.user!.id, req.params.workspaceId);
+    res.json(result);
+  } catch (err) { next(err); }
+};
+
+// POST /api/workspaces/join — consumes a reusable invite link for whoever is
+// currently signed in, same trust model as acceptInvitationHandler above.
+export const joinWorkspaceHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    const result = await invitationsService.joinWorkspaceViaLink(req.user!.id, req.body.token);
+    res.json(result);
+  } catch (err) { next(err); }
+};

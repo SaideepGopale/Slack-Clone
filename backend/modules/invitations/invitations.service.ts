@@ -1,5 +1,6 @@
+import jwt from 'jsonwebtoken';
 import { Prisma } from '@prisma/client';
-import { APP_URL } from '../../config/env';
+import { APP_URL, JWT_SECRET } from '../../config/env';
 import { prisma } from '../../lib/prisma';
 import { sendInviteEmail } from '../../utils/mailer';
 
@@ -176,6 +177,92 @@ export const acceptInvitation = async (token: string, userId: string) => {
   }
 
   return { workspaceId: invitation.workspaceId, generalChannelId: generalChannel.id };
+};
+
+// Discord/Slack-style reusable invite link — a stateless alternative to the
+// per-email Invitation flow above, added because email delivery isn't
+// reliably reachable right now (see mailer.ts). Deliberately NOT an
+// Invitation DB row: nothing to look up by email, no single recipient to
+// lock it to — the JWT itself carries everything needed (just the
+// workspaceId), so anyone holding the link can join. Trade-off: unlike a
+// DB-backed invite, this can't be individually revoked/tracked short of
+// rotating JWT_SECRET (which would also invalidate every login session) —
+// acceptable for now, revisit if per-link revocation is ever needed.
+const WORKSPACE_JOIN_TOKEN_TTL = '7d';
+
+interface WorkspaceJoinTokenPayload {
+  workspaceId: string;
+}
+
+export const getWorkspaceInviteLink = async (adminId: string, workspaceId: string) => {
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } });
+  if (!workspace) {
+    throw new HttpError(404, 'Workspace not found');
+  }
+  await assertIsWorkspaceAdmin(adminId, workspaceId);
+
+  const token = jwt.sign({ workspaceId } as WorkspaceJoinTokenPayload, JWT_SECRET as string, {
+    expiresIn: WORKSPACE_JOIN_TOKEN_TTL,
+  });
+
+  return { url: `${APP_URL}/join-workspace?token=${token}` };
+};
+
+// Authenticated — consumes the link for whoever is currently signed in,
+// same trust model as acceptInvitation above. No email-match check here
+// (unlike acceptInvitation): this link was never bound to a specific
+// recipient in the first place.
+export const joinWorkspaceViaLink = async (userId: string, token: string) => {
+  if (!token || typeof token !== 'string') {
+    throw new HttpError(400, 'Invalid invite link');
+  }
+
+  let payload: WorkspaceJoinTokenPayload;
+  try {
+    payload = jwt.verify(token, JWT_SECRET as string) as WorkspaceJoinTokenPayload;
+  } catch {
+    throw new HttpError(400, 'This invite link is invalid or has expired.');
+  }
+
+  const { workspaceId } = payload;
+  if (!workspaceId) {
+    throw new HttpError(400, 'Invalid invite link');
+  }
+
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId } });
+  if (!workspace) {
+    throw new HttpError(404, 'This workspace no longer exists.');
+  }
+
+  const generalChannel = await prisma.channel.findFirst({
+    where: { name: 'General', isDM: false, workspaceId },
+  });
+  if (!generalChannel) {
+    throw new HttpError(500, 'This workspace has no "General" channel to join — contact an admin.');
+  }
+
+  try {
+    await prisma.$transaction([
+      prisma.workspaceMember.upsert({
+        where: { userId_workspaceId: { userId, workspaceId } },
+        update: {},
+        create: { userId, workspaceId, role: 'MEMBER' },
+      }),
+      prisma.channelMember.upsert({
+        where: { userId_channelId: { userId, channelId: generalChannel.id } },
+        update: {},
+        create: { userId, channelId: generalChannel.id, role: 'member' },
+      }),
+    ]);
+  } catch (err) {
+    // Same benign race as acceptInvitation above (P2002 on a near-simultaneous
+    // double-click/StrictMode double-fire) — the rows exist regardless of
+    // which call "won", so this is a no-op success, not a real failure.
+    const isDuplicateRace = err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
+    if (!isDuplicateRace) throw err;
+  }
+
+  return { workspaceId, generalChannelId: generalChannel.id };
 };
 
 export { HttpError };

@@ -68,6 +68,67 @@ describe('workspace + channel lifecycle', () => {
   });
 });
 
+describe('reusable workspace invite link', () => {
+  it('generates a link (admin only) that a different user can join through', async () => {
+    const owner = await createAndLoginUser();
+    const outsider = await createAndLoginUser();
+
+    const createRes = await request(app)
+      .post('/api/workspaces')
+      .set(authHeader(owner.token))
+      .send({ name: `Invite Link Test ${Date.now()}` });
+    const workspaceId = createRes.body.workspace.id;
+    const generalChannelId = createRes.body.generalChannel.id;
+
+    const linkRes = await request(app)
+      .get(`/api/workspaces/${workspaceId}/invite-link`)
+      .set(authHeader(owner.token));
+    expect(linkRes.status).toBe(200);
+    expect(linkRes.body.url).toContain('/join-workspace?token=');
+
+    const token = new URL(linkRes.body.url).searchParams.get('token');
+
+    const joinRes = await request(app)
+      .post('/api/workspaces/join')
+      .set(authHeader(outsider.token))
+      .send({ token });
+    expect(joinRes.status).toBe(200);
+    expect(joinRes.body).toMatchObject({ workspaceId, generalChannelId });
+
+    const channelsRes = await request(app)
+      .get(`/api/workspaces/${workspaceId}/channels`)
+      .set(authHeader(outsider.token));
+    expect(channelsRes.status).toBe(200);
+    expect(channelsRes.body).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: generalChannelId })])
+    );
+  });
+
+  it('denies generating a link for a non-admin member', async () => {
+    const owner = await createAndLoginUser();
+    const createRes = await request(app)
+      .post('/api/workspaces')
+      .set(authHeader(owner.token))
+      .send({ name: `Invite Link Test ${Date.now()}` });
+    const workspaceId = createRes.body.workspace.id;
+
+    const nonAdmin = await createAndLoginUser();
+    const res = await request(app)
+      .get(`/api/workspaces/${workspaceId}/invite-link`)
+      .set(authHeader(nonAdmin.token));
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects joining with a bogus token', async () => {
+    const { token } = await createAndLoginUser();
+    const res = await request(app)
+      .post('/api/workspaces/join')
+      .set(authHeader(token))
+      .send({ token: 'not-a-real-jwt' });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('PATCH /api/users/me/active-workspace', () => {
   it('updates lastActiveWorkspaceId for a member, and reflects it on the next /me call', async () => {
     const { token } = await createAndLoginUser();

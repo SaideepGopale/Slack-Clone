@@ -112,10 +112,9 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
     fetchData();
   }, [workspaceId]);
 
-  // InviteMemberModal owns the POST /api/workspaces/:workspaceId/invites call,
-  // its own toasts, and its own loading state — this just needs to reopen the
-  // Invitations list afterward so a freshly-sent invite shows up without a
-  // manual refresh.
+  // InviteMemberModal owns generating/copying the invite link itself (GET
+  // /api/workspaces/:workspaceId/invite-link) — this just refreshes this
+  // page's own data on close, in case anything else here depends on it.
   const closeInviteModal = () => {
     setIsInviteModalOpen(false);
     fetchData();

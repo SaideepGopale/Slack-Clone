@@ -19,10 +19,17 @@ export const LoginPage = () => {
   const location = useLocation();
   const navigate = useNavigate();
   const inviteToken = searchParams.get('inviteToken');
+  // Reusable invite-link token (see JoinWorkspacePage.tsx) — a separate query
+  // param from inviteToken since it goes through a different backend
+  // endpoint (POST /api/workspaces/join, not email-bound) and isn't tied to
+  // any specific account, but otherwise follows the exact same "consume once
+  // authenticated" shape.
+  const joinToken = searchParams.get('joinToken');
   // StrictMode double-invokes effects in dev, which would otherwise fire two
   // near-simultaneous accept calls for the same token — guard so it only
   // ever actually runs once per token, not just tolerate the race server-side.
   const acceptedTokenRef = useRef<string | null>(null);
+  const joinedTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!user || !inviteToken) return;
@@ -36,9 +43,21 @@ export const LoginPage = () => {
       });
   }, [user, inviteToken, navigate]);
 
+  useEffect(() => {
+    if (!user || !joinToken) return;
+    if (joinedTokenRef.current === joinToken) return;
+    joinedTokenRef.current = joinToken;
+    axios.post<{ workspaceId: string; generalChannelId: string }>('/api/workspaces/join', { token: joinToken })
+      .then(({ data }) => navigate(`/${data.workspaceId}/c/${data.generalChannelId}`, { replace: true }))
+      .catch((err) => {
+        toast.error(err.response?.data?.error || 'Failed to join the workspace.');
+        navigate('/', { replace: true });
+      });
+  }, [user, joinToken, navigate]);
+
   if (loading) return <LoadingScreen />;
   if (user) {
-    if (inviteToken) return <LoadingScreen />; // the effect above takes it from here
+    if (inviteToken || joinToken) return <LoadingScreen />; // the effects above take it from here
     return <Navigate to={isAdminAccount(user) ? '/admin' : '/'} replace />;
   }
 

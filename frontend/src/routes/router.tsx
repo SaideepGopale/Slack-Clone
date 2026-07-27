@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { ResetPassword } from '../components/auth/ResetPassword';
 import { AdminPage } from '../pages/admin/AdminPage';
 import { InviteHandler } from '../pages/auth/InviteHandler';
+import { JoinWorkspacePage } from '../pages/auth/JoinWorkspacePage';
 import { LoginPage } from '../pages/auth/LoginPage';
 import { ActivityPage } from '../pages/workspace/ActivityPage';
 import { ChannelPage } from '../pages/workspace/ChannelPage';
@@ -24,6 +25,9 @@ export const router = createBrowserRouter([
   // and routes to /login or /signup (or accepts immediately if already
   // signed in as the invited account). See InviteHandler.tsx.
   { path: '/invite/:token', element: <InviteHandler /> },
+  // Discord/Slack-style reusable invite link — ?token=<jwt>, not bound to any
+  // specific email. See JoinWorkspacePage.tsx.
+  { path: '/join-workspace', element: <JoinWorkspacePage /> },
   {
     path: '/admin',
     element: (
