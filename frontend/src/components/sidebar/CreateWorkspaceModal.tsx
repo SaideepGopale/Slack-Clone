@@ -1,110 +1,144 @@
-import axios from 'axios';
-import { Loader2, X } from 'lucide-react';
-import { useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
+import { NAME_MAX } from '../../lib/adminAccess';
+import { errorMessage, organizationsApi, workspacesApi } from '../../lib/api';
+import type { OrganizationSummary } from '../../lib/api';
 import { Workspace } from '../../types';
+import { Button, Field, Modal, TextArea, TextInput } from '../ui';
 
 interface CreateWorkspaceModalProps {
   isOpen: boolean;
   onClose: () => void;
   onCreated?: (workspace: Workspace) => void;
+  /**
+   * Create inside this organization (organization page). Without it the user
+   * chooses: a new organization (previous behaviour) or one they manage.
+   */
+  organization?: { id: string; name: string };
 }
 
-export const CreateWorkspaceModal = ({ isOpen, onClose, onCreated }: CreateWorkspaceModalProps) => {
+const NEW_ORGANIZATION = '';
+
+/**
+ * F2: organization-aware workspace creation on the accessible ui/Modal.
+ * Only organizations whose server capabilities allow creating workspaces are
+ * offered; the server re-checks (organization OWNER/ADMIN).
+ */
+export const CreateWorkspaceModal = ({ isOpen, onClose, onCreated, organization }: CreateWorkspaceModalProps) => {
   const [name, setName] = useState('');
+  const [description, setDescription] = useState(''); // Stage 3 (T.22): optional
   const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [organizations, setOrganizations] = useState<OrganizationSummary[]>([]);
+  const [organizationId, setOrganizationId] = useState<string>(organization?.id ?? NEW_ORGANIZATION);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setOrganizationId(organization?.id ?? NEW_ORGANIZATION);
+    if (organization) return;
+    let cancelled = false;
+    organizationsApi
+      .listOrganizations()
+      .then((list) => {
+        if (!cancelled) setOrganizations(list.filter((o) => o.capabilities?.canCreateWorkspace));
+      })
+      .catch(() => {
+        if (!cancelled) setOrganizations([]); // still possible: a new organization
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, organization]);
 
   if (!isOpen) return null;
 
   const resetAndClose = () => {
     setName('');
+    setDescription('');
+    setError(null);
     onClose();
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const trimmedName = name.trim();
     if (!trimmedName) {
-      toast.error('Workspace name is required.');
+      setError('Workspace name is required.');
       return;
     }
-
     setCreating(true);
+    setError(null);
     try {
-      const res = await axios.post<{ workspace: Workspace; generalChannel: unknown }>('/api/workspaces', {
+      const trimmedDescription = description.trim();
+      const res = await workspacesApi.createWorkspace({
         name: trimmedName,
+        ...(organizationId ? { organizationId } : {}),
+        ...(trimmedDescription ? { description: trimmedDescription } : {}),
       });
-
-      onCreated?.(res.data.workspace);
+      onCreated?.(res.workspace);
       resetAndClose();
       // The workspace's own index route resolves straight into its General
       // channel (see WorkspaceIndex.tsx) — no need to know the channel id here.
-      navigate(`/${res.data.workspace.id}`);
-      toast.success(`"${res.data.workspace.name}" created!`);
-    } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Failed to create workspace.');
+      navigate(`/${res.workspace.id}`);
+      toast.success(`"${res.workspace.name}" created!`);
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to create workspace.'));
     } finally {
       setCreating(false);
     }
   };
 
+  const target = organization ?? organizations.find((o) => o.id === organizationId);
+
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-        <form onSubmit={handleSubmit} className="p-8">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 bg-violet-50 rounded-xl flex items-center justify-center text-violet-600 shrink-0 border border-violet-100 font-black text-xl">
-              W
-            </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="text-xl font-black text-gray-900 tracking-tight">Create a workspace</h3>
-              <p className="text-xs text-gray-400 font-bold uppercase tracking-widest leading-none mt-1">A new home for your team</p>
-            </div>
-            <button
-              type="button"
-              onClick={resetAndClose}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors shrink-0"
+    <Modal
+      title="Create a workspace"
+      subtitle={organization ? `In ${organization.name}` : 'A new home for your team'}
+      onClose={resetAndClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={resetAndClose} disabled={creating}>
+            Cancel
+          </Button>
+          <Button type="submit" form="create-workspace-form" loading={creating} disabled={!name.trim()}>
+            Create Workspace
+          </Button>
+        </>
+      }
+    >
+      <form id="create-workspace-form" onSubmit={handleSubmit} className="space-y-4">
+        <Field
+          label="Workspace name"
+          error={error}
+          hint={`You'll be its owner, and we'll set up a "General" channel automatically.`}
+        >
+          <TextInput autoFocus maxLength={NAME_MAX} placeholder="Acme Corp" value={name} onChange={(e) => setName(e.target.value)} />
+        </Field>
+        <Field label="Description (optional)" hint="What this team works on. Up to 500 characters.">
+          <TextArea maxLength={500} rows={2} placeholder="Where the design team works" value={description} onChange={(e) => setDescription(e.target.value)} />
+        </Field>
+        {!organization && organizations.length > 0 && (
+          <Field
+            label="Organization"
+            hint={target ? `Organization admins of ${target.name} will be able to manage it.` : 'A new organization with the same name, owned by you.'}
+          >
+            <select
+              value={organizationId}
+              onChange={(e) => setOrganizationId(e.target.value)}
+              className="w-full bg-surface border border-line rounded-xl px-3 py-2.5 text-sm text-fg outline-none focus:border-brand focus:ring-2 focus:ring-brand-muted"
             >
-              <X size={18} />
-            </button>
-          </div>
-
-          <div>
-            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Workspace Name</label>
-            <input
-              autoFocus
-              type="text"
-              maxLength={80}
-              placeholder="Acme Corp"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm font-medium text-gray-900 outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-all"
-            />
-            <p className="text-xs text-gray-400 mt-2">
-              You'll be the admin, and we'll set up a "General" channel automatically.
-            </p>
-          </div>
-
-          <div className="flex gap-3 mt-8">
-            <button
-              type="button"
-              onClick={resetAndClose}
-              className="flex-1 px-6 py-3 border border-gray-200 text-gray-600 font-black rounded-xl hover:bg-gray-50 transition-all active:scale-95 text-sm"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={creating || !name.trim()}
-              className="flex-1 px-6 py-3 bg-violet-600 text-white font-black rounded-xl hover:bg-violet-700 transition-all active:scale-95 text-sm disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {creating ? <Loader2 size={16} className="animate-spin" /> : 'Create Workspace'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+              <option value={NEW_ORGANIZATION}>New organization</option>
+              {organizations.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
+      </form>
+    </Modal>
   );
 };

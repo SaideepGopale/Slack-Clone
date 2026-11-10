@@ -1,14 +1,16 @@
-import { ArrowLeft, ClipboardList, Hash, HardDrive, LayoutDashboard, LogOut, MessageSquareOff, ShieldAlert, Users } from 'lucide-react';
+import { ArrowLeft, Building2, ClipboardList, Hash, HardDrive, LayoutDashboard, LogOut, MessageSquareOff, ShieldAlert, UserCog, Users } from 'lucide-react';
 import { useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { AdminDashboard } from './AdminDashboard';
 import { AuditLogViewer } from './AuditLogViewer';
-import { ChannelManagement } from './ChannelManagement'; // 👇 Naya import add ho gaya
+import { ChannelManagement } from './ChannelManagement';
+import { CompanyOverview } from './CompanyOverview'; // 👇 Naya import add ho gaya
 import { FileStorageManagement } from './FileStorageManagement';
 import { MessageModeration } from './MessageModeration';
+import { TeamManagement } from './TeamManagement';
 import { UserManagement } from './UserManagement';
 
-type AdminTab = 'dashboard' | 'users' | 'channels' | 'audit' | 'moderation' | 'files';
+type AdminTab = 'dashboard' | 'users' | 'team' | 'company' | 'channels' | 'audit' | 'moderation' | 'files';
 
 export const AdminLayout = () => {
   const [activeTab, setActiveTab] = useState<AdminTab>('dashboard');
@@ -21,6 +23,10 @@ export const AdminLayout = () => {
         return <AdminDashboard />;
       case 'users':
         return <UserManagement />;
+      case 'team':
+        return <TeamManagement />; // Stage 2: Company Admin → Team Lead provisioning
+      case 'company':
+        return <CompanyOverview />; // Stage 4: read-only company workspace overview
       case 'channels':
         return <ChannelManagement />; // 👇 Ab ye naya component call karega
       case 'audit':
@@ -83,6 +89,32 @@ export const AdminLayout = () => {
             }`}
           >
             <Users size={18} /> User Management
+          </button>
+
+          <button
+            onClick={() => setActiveTab('team')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-semibold text-sm transition-all duration-300 ${
+              activeTab === 'team'
+                ? 'bg-blue-50 text-blue-700 border border-blue-200 shadow-sm'
+                : 'text-gray-700 hover:text-blue-600 hover:bg-gray-50 border border-transparent'
+            }`}
+          >
+            <UserCog size={18} /> Team Management
+          </button>
+
+          <div className="text-[10px] font-bold text-gray-600 uppercase tracking-wider mt-4 mb-2 px-3">
+            Company
+          </div>
+
+          <button
+            onClick={() => setActiveTab('company')}
+            className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-semibold text-sm transition-all duration-300 ${
+              activeTab === 'company'
+                ? 'bg-blue-50 text-blue-700 border border-blue-200 shadow-sm'
+                : 'text-gray-700 hover:text-blue-600 hover:bg-gray-50 border border-transparent'
+            }`}
+          >
+            <Building2 size={18} /> Workspace Overview
           </button>
 
           <button

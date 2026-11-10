@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { app } from '../app';
-import { authHeader, createAndLoginUser } from './helpers';
+import { authHeader, createAndLoginUser, createTeamLead } from './helpers';
 
 describe('admin route gating', () => {
   it('denies a regular user access to admin routes', async () => {
@@ -34,7 +34,7 @@ describe('admin route gating', () => {
 describe('POST /api/admin/broadcast', () => {
   it('lets an admin post an announcement into any channel, delivered as a real message', async () => {
     const admin = await createAndLoginUser({ role: 'ADMIN' });
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead(); // Stage 1: workspace creators are Team Leads
 
     const createRes = await request(app)
       .post('/api/workspaces')
@@ -65,7 +65,7 @@ describe('POST /api/admin/broadcast', () => {
 
   it('rejects a broadcast with no content', async () => {
     const admin = await createAndLoginUser({ role: 'ADMIN' });
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead(); // Stage 1: workspace creators are Team Leads
     const createRes = await request(app)
       .post('/api/workspaces')
       .set(authHeader(owner.token))

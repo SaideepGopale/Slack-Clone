@@ -1,0 +1,7 @@
+import '@testing-library/jest-dom/vitest';
+import { cleanup } from '@testing-library/react';
+import { afterEach } from 'vitest';
+
+// Vitest globals are off, so Testing Library's automatic cleanup isn't
+// registered — unmount rendered trees between tests explicitly.
+afterEach(() => cleanup());

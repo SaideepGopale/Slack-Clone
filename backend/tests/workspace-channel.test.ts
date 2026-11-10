@@ -1,11 +1,11 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { app } from '../app';
-import { authHeader, createAndLoginUser } from './helpers';
+import { authHeader, createAndLoginUser, createTeamLead } from './helpers';
 
 describe('workspace + channel lifecycle', () => {
   it('creates a workspace with a seeded General channel, and lets the owner create more channels', async () => {
-    const { token } = await createAndLoginUser();
+    const { token } = await createTeamLead(); // Stage 1: workspace creators are Team Leads
 
     const createRes = await request(app)
       .post('/api/workspaces')
@@ -32,7 +32,7 @@ describe('workspace + channel lifecycle', () => {
   });
 
   it('rejects channel creation with a reserved name', async () => {
-    const { token } = await createAndLoginUser();
+    const { token } = await createTeamLead();
     const createRes = await request(app)
       .post('/api/workspaces')
       .set(authHeader(token))
@@ -47,7 +47,7 @@ describe('workspace + channel lifecycle', () => {
   });
 
   it('denies workspace access to someone who is not a member', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const outsider = await createAndLoginUser();
 
     const createRes = await request(app)
@@ -86,7 +86,7 @@ describe('reusable workspace invite link', () => {
   };
 
   it('generates a link (admin only) with the expected /join-workspace shape', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const createRes = await request(app)
       .post('/api/workspaces')
       .set(authHeader(owner.token))
@@ -101,7 +101,7 @@ describe('reusable workspace invite link', () => {
   });
 
   it('denies generating a link for a non-admin member', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const createRes = await request(app)
       .post('/api/workspaces')
       .set(authHeader(owner.token))
@@ -125,7 +125,7 @@ describe('reusable workspace invite link', () => {
   });
 
   it('files a PENDING join request instead of joining instantly, and denies channel access until approved', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const outsider = await createAndLoginUser();
     const { workspaceId, token } = await createWorkspaceAndLink(owner.token);
 
@@ -143,7 +143,7 @@ describe('reusable workspace invite link', () => {
   });
 
   it('re-requesting while already pending is a harmless no-op', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const outsider = await createAndLoginUser();
     const { token } = await createWorkspaceAndLink(owner.token);
 
@@ -154,7 +154,7 @@ describe('reusable workspace invite link', () => {
   });
 
   it('returns already_member for someone who already belongs to the workspace', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const { workspaceId, generalChannelId, token } = await createWorkspaceAndLink(owner.token);
 
     const res = await request(app)
@@ -191,7 +191,7 @@ describe('workspace join request approval', () => {
   };
 
   it('lists pending requests for an admin, including the requester\'s user info', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const outsider = await createAndLoginUser();
     const { workspaceId } = await fileJoinRequest(owner.token, outsider.token);
 
@@ -207,7 +207,7 @@ describe('workspace join request approval', () => {
   });
 
   it('denies listing requests to a non-admin', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const outsider = await createAndLoginUser();
     const { workspaceId } = await fileJoinRequest(owner.token, outsider.token);
 
@@ -218,7 +218,7 @@ describe('workspace join request approval', () => {
   });
 
   it('APPROVE adds the user to the workspace and its General channel', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const outsider = await createAndLoginUser();
     const { workspaceId, generalChannelId, requestId } = await fileJoinRequest(owner.token, outsider.token);
 
@@ -239,7 +239,7 @@ describe('workspace join request approval', () => {
   });
 
   it('REJECT leaves the user without access, and the request no longer shows as pending', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const outsider = await createAndLoginUser();
     const { workspaceId, requestId } = await fileJoinRequest(owner.token, outsider.token);
 
@@ -262,7 +262,7 @@ describe('workspace join request approval', () => {
   });
 
   it('rejects resolving an already-resolved request', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const outsider = await createAndLoginUser();
     const { workspaceId, requestId } = await fileJoinRequest(owner.token, outsider.token);
 
@@ -279,7 +279,7 @@ describe('workspace join request approval', () => {
   });
 
   it('denies resolving requests to a non-admin', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const outsider = await createAndLoginUser();
     const { workspaceId, requestId } = await fileJoinRequest(owner.token, outsider.token);
 
@@ -293,7 +293,7 @@ describe('workspace join request approval', () => {
 
 describe('PATCH /api/users/me/active-workspace', () => {
   it('updates lastActiveWorkspaceId for a member, and reflects it on the next /me call', async () => {
-    const { token } = await createAndLoginUser();
+    const { token } = await createTeamLead();
     const createRes = await request(app)
       .post('/api/workspaces')
       .set(authHeader(token))
@@ -311,7 +311,7 @@ describe('PATCH /api/users/me/active-workspace', () => {
   });
 
   it('rejects setting it to a workspace the caller is not a member of', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead();
     const outsider = await createAndLoginUser();
     const createRes = await request(app)
       .post('/api/workspaces')

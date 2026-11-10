@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { useAuth } from '../../contexts/AuthContext';
+import { isInvitationToken } from '../../lib/invitationToken';
 
 interface InvitationLookup {
   valid: true;
@@ -51,14 +52,22 @@ export const InviteHandler = () => {
       setError('No invitation token was provided.');
       return;
     }
+    // FA-SEC-04: the token comes from the address bar. Only a canonical UUID
+    // is ever used — encoded — in a request path or a redirect; anything else
+    // stops here, before any request.
+    if (!isInvitationToken(token)) {
+      setError('This invitation link is invalid or has expired.');
+      return;
+    }
     startedRef.current = true;
+    const encodedToken = encodeURIComponent(token);
 
-    axios.get<InvitationLookup>(`/api/invitations/${token}`)
+    axios.get<InvitationLookup>(`/api/invitations/${encodedToken}`)
       .then(async ({ data }) => {
         if (data.isExistingUser && userRef.current) {
           try {
             const res = await axios.post<{ workspaceId: string; generalChannelId: string }>(
-              `/api/invitations/accept/${token}`
+              `/api/invitations/accept/${encodedToken}`
             );
             navigate(`/${res.data.workspaceId}/c/${res.data.generalChannelId}`, { replace: true });
           } catch (err: any) {
@@ -72,11 +81,11 @@ export const InviteHandler = () => {
         }
 
         if (data.isExistingUser) {
-          navigate(`/login?inviteToken=${token}`, { replace: true });
+          navigate(`/login?inviteToken=${encodedToken}`, { replace: true });
           return;
         }
 
-        navigate(`/signup?inviteToken=${token}&email=${encodeURIComponent(data.email)}`, { replace: true });
+        navigate(`/signup?inviteToken=${encodedToken}&email=${encodeURIComponent(data.email)}`, { replace: true });
       })
       .catch((err) => {
         setError(err.response?.data?.error || 'This invitation link is invalid or has expired.');

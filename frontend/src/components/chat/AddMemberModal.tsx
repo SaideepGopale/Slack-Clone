@@ -6,7 +6,8 @@ import { toast } from 'react-toastify';
 interface AddableUser {
   id: string;
   username: string;
-  email: string;
+  /** Only sent to workspace managers (FA-SEC-03). */
+  email?: string;
 }
 
 interface AddMemberModalProps {
@@ -113,7 +114,7 @@ export const AddMemberModal = ({ isOpen, onClose, channelId, channelName }: AddM
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm font-bold text-gray-900 truncate">{u.username}</div>
-                      <div className="text-xs text-gray-400 truncate">{u.email}</div>
+                      {u.email && <div className="text-xs text-gray-400 truncate">{u.email}</div>}
                     </div>
                     <button
                       onClick={() => handleAdd(u)}

@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Settings, Shield, Bell, Zap, HelpCircle, LogOut, ChevronRight, User, Globe, Lock } from 'lucide-react';
+import { Settings, Bell, Zap, LogOut, ChevronRight, Globe, Building2 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
 interface MoreViewProps {
@@ -20,19 +20,15 @@ export const MoreView = ({ onViewChange }: MoreViewProps) => {
       ]
     },
     {
-      title: 'Workspace Settings',
+      // F2: administration entry points (also in the workspace menu and rail).
+      title: 'Administration',
       items: [
-        { label: 'Preferences', icon: Settings, action: () => {} },
-        { label: 'Privacy & Permissions', icon: Shield, action: () => {} },
-        { label: 'Connections', icon: Lock, action: () => {} },
+        { label: 'Workspace settings', icon: Settings, action: () => onViewChange('settings') },
+        { label: 'Organizations', icon: Building2, action: () => onViewChange('organizations') },
       ]
     },
-    {
-      title: 'Support',
-      items: [
-        { label: 'Help Center', icon: HelpCircle, action: () => {} },
-      ]
-    }
+    // F1 removed the "Workspace Settings" (Preferences, Privacy & Permissions,
+    // Connections) and "Support" (Help Center) items: they did nothing.
   ];
 
   return (

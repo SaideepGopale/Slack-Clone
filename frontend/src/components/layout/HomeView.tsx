@@ -6,14 +6,15 @@ import { Channel } from '../../types';
 
 interface HomeViewProps {
   channels: Channel[];
+  dms: Channel[];
   onSelectChannel: (channel: Channel) => void;
   onViewChange: (view: any) => void;
 }
 
-export const HomeView = ({ channels, onSelectChannel, onViewChange }: HomeViewProps) => {
+export const HomeView = ({ channels, dms, onSelectChannel, onViewChange }: HomeViewProps) => {
   const { user } = useAuth();
   const publicChannels = channels.filter(c => !c.isDM);
-  const dmChannels = channels.filter(c => c.isDM);
+  const dmChannels = dms;
 
   return (
     <div className="flex-1 flex flex-col h-full bg-white overflow-y-auto slack-scrollbar selection:bg-slack-purple/10">
@@ -43,7 +44,7 @@ export const HomeView = ({ channels, onSelectChannel, onViewChange }: HomeViewPr
             </div>
             <div>
               <h3 className="font-black text-gray-900 tracking-tight">Active Channels</h3>
-              <p className="text-sm text-gray-500 font-medium">{publicChannels.length} collaboration spaces</p>
+              <p className="text-sm text-gray-500 font-medium">{publicChannels.length} collaboration {publicChannels.length === 1 ? 'space' : 'spaces'}</p>
             </div>
             <button onClick={() => onViewChange('directory')} className="mt-2 text-xs font-black text-slack-purple uppercase tracking-widest flex items-center gap-2 hover:gap-3 transition-all">
               Join More <ArrowRight size={14} />
@@ -59,7 +60,7 @@ export const HomeView = ({ channels, onSelectChannel, onViewChange }: HomeViewPr
             </div>
             <div>
               <h3 className="font-black tracking-tight">Direct Messages</h3>
-              <p className="text-sm text-purple-100/70 font-medium">{dmChannels.length} private conversations</p>
+              <p className="text-sm text-purple-100/70 font-medium">{dmChannels.length} private {dmChannels.length === 1 ? 'conversation' : 'conversations'}</p>
             </div>
             <button onClick={() => onViewChange('dms')} className="mt-2 text-xs font-black text-white uppercase tracking-widest flex items-center gap-2 hover:gap-3 transition-all">
               View All <ArrowRight size={14} />

@@ -2,6 +2,7 @@ import { Loader2, Mic, MicOff, Phone, PhoneIncoming, PhoneOff, ScreenShare, Scre
 import { useEffect, useRef, useState } from 'react';
 import { Socket } from 'socket.io-client';
 import { useAuth } from '../../contexts/AuthContext';
+import { CallType, displayCallerName, formatCallDuration, isSignalFromCallPeer, MAX_PENDING_CANDIDATES } from '../../lib/callSignalling';
 
 interface CallOverlayProps {
   channelId: string;
@@ -87,6 +88,9 @@ const gridColsClass = (tileCount: number): string => {
 
 export const CallOverlay = ({ channelId, callType, socket, onEndCall, workspaceId }: CallOverlayProps) => {
   const { user } = useAuth();
+  // The call effect only needs to know someone is signed in — depending on the
+  // user object itself would restart the call whenever it's refreshed.
+  const signedIn = !!user;
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const screenStreamRef = useRef<MediaStream | null>(null);
@@ -109,6 +113,17 @@ export const CallOverlay = ({ channelId, callType, socket, onEndCall, workspaceI
   const [cameraOn, setCameraOn] = useState(callType === 'video');
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [activeSpeakerId, setActiveSpeakerId] = useState<string | null>(null);
+  // P2 Phase H: the call clock starts when the first other person connects.
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (remotePeers.length > 0 && connectedAt === null) setConnectedAt(Date.now());
+  }, [remotePeers.length, connectedAt]);
+  useEffect(() => {
+    if (connectedAt === null) return;
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [connectedAt]);
 
   useEffect(() => {
     onEndCallRef.current = onEndCall;
@@ -186,7 +201,7 @@ export const CallOverlay = ({ channelId, callType, socket, onEndCall, workspaceI
   }, []);
 
   useEffect(() => {
-    if (!user) return;
+    if (!signedIn) return;
     let cancelled = false;
 
     const removePeer = (socketId: string) => {
@@ -278,7 +293,12 @@ export const CallOverlay = ({ channelId, callType, socket, onEndCall, workspaceI
       // both sides racing to create competing offers ("glare").
     };
 
-    const handleOffer = async (data: { from: string; offer: RTCSessionDescriptionInit }) => {
+    // FA-RT-01: only participants of THIS call (announced by the server via
+    // existing-participants / peer-joined) may open a peer connection. An
+    // offer from anyone else is ignored — never answered, and no local
+    // microphone/camera track is attached for it.
+    const handleOffer = async (data: { from: string; channelId?: string; offer: RTCSessionDescriptionInit }) => {
+      if (!isSignalFromCallPeer(data, channelId, participantsRef.current)) return;
       const pc = createPeerConnection(data.from);
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
@@ -291,7 +311,8 @@ export const CallOverlay = ({ channelId, callType, socket, onEndCall, workspaceI
       }
     };
 
-    const handleAnswer = async (data: { from: string; answer: RTCSessionDescriptionInit }) => {
+    const handleAnswer = async (data: { from: string; channelId?: string; answer: RTCSessionDescriptionInit }) => {
+      if (!isSignalFromCallPeer(data, channelId, participantsRef.current)) return;
       const pc = peerConnectionsRef.current.get(data.from);
       if (!pc) return;
       try {
@@ -302,11 +323,13 @@ export const CallOverlay = ({ channelId, callType, socket, onEndCall, workspaceI
       }
     };
 
-    const handleIceCandidate = async (data: { from: string; candidate: RTCIceCandidateInit }) => {
+    const handleIceCandidate = async (data: { from: string; channelId?: string; candidate: RTCIceCandidateInit }) => {
+      if (!isSignalFromCallPeer(data, channelId, participantsRef.current)) return;
       const pc = peerConnectionsRef.current.get(data.from);
       if (!pc || !pc.remoteDescription) {
-        // Candidate arrived before the offer/answer exchange finished — buffer it.
+        // Candidate arrived before the offer/answer exchange finished — buffer it (bounded).
         const queue = pendingCandidatesRef.current.get(data.from) ?? [];
+        if (queue.length >= MAX_PENDING_CANDIDATES) return;
         queue.push(data.candidate);
         pendingCandidatesRef.current.set(data.from, queue);
         return;
@@ -388,7 +411,7 @@ export const CallOverlay = ({ channelId, callType, socket, onEndCall, workspaceI
       localStreamRef.current?.getTracks().forEach((track) => track.stop());
       localStreamRef.current = null;
     };
-  }, [channelId, callType, socket, user]);
+  }, [channelId, callType, socket, signedIn]);
 
   const toggleMic = () => {
     const next = !micOn;
@@ -466,7 +489,8 @@ export const CallOverlay = ({ channelId, callType, socket, onEndCall, workspaceI
   const totalTiles = remotePeers.length + 1;
 
   return (
-    <div className="fixed inset-0 z-[200] bg-gray-950 flex flex-col">
+    // theme-fixed: the call screen is dark by design in both themes (index.css).
+    <div className="theme-fixed fixed inset-0 z-[200] bg-gray-950 flex flex-col">
       <div className="flex-1 relative overflow-hidden">
         {(status === 'connecting' || status === 'connected') && (
           <div className={`w-full h-full grid ${gridColsClass(totalTiles)} auto-rows-fr gap-3 p-3`}>
@@ -483,6 +507,17 @@ export const CallOverlay = ({ channelId, callType, socket, onEndCall, workspaceI
             {remotePeers.map((peer) => (
               <RemoteVideoTile key={peer.socketId} peer={peer} isSpeaking={activeSpeakerId === peer.socketId} />
             ))}
+          </div>
+        )}
+
+        {status === 'connected' && (
+          <div className="absolute top-4 left-4 z-10 flex items-center gap-2 rounded-lg bg-black/50 px-3 py-1.5 text-xs font-medium text-gray-100 backdrop-blur">
+            <span aria-hidden="true" className={`w-2 h-2 rounded-full ${connectedAt ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+            <span>{connectedAt ? formatCallDuration(clock - connectedAt) : 'Not connected yet'}</span>
+            <span aria-hidden="true">·</span>
+            <span title={[`${user?.username ?? 'You'} (You)`, ...remotePeers.map((p) => p.username)].join(', ')}>
+              {remotePeers.length + 1} in call
+            </span>
           </div>
         )}
 
@@ -637,6 +672,12 @@ interface IncomingCallBannerProps {
 
 export const IncomingCallBanner = ({ callerName, callType, onAccept, onDecline }: IncomingCallBannerProps) => {
   const [elapsed, setElapsed] = useState(0);
+  // FA-RT-02: these values arrived over the socket. WorkspaceLayout validates
+  // them first; this keeps the ringing UI renderable even if anything slips
+  // through (a non-text name used to throw on `callerName[0]` or render an
+  // object). An unknown type is shown as audio, the type that never uses the camera.
+  const name = displayCallerName(callerName);
+  const kind: CallType = callType === 'video' ? 'video' : 'audio';
 
   useEffect(() => {
     const t = setInterval(() => setElapsed(e => e + 1), 1000);
@@ -644,23 +685,23 @@ export const IncomingCallBanner = ({ callerName, callType, onAccept, onDecline }
   }, []);
 
   return (
-    <div className="fixed top-4 right-4 z-[300] w-80 bg-gray-900 rounded-xl shadow-2xl border border-white/10 overflow-hidden animate-in slide-in-from-top-4">
+    <div className="theme-fixed fixed top-4 right-4 z-[300] w-80 bg-gray-900 rounded-xl shadow-2xl border border-white/10 overflow-hidden animate-in slide-in-from-top-4">
       <div className="h-1 bg-gradient-to-r from-violet-400 to-violet-600 animate-pulse" />
       <div className="p-5">
         <div className="flex items-center gap-4 mb-5">
           <div className="relative">
             <div className="w-14 h-14 rounded-full bg-gradient-to-br from-violet-500 to-violet-700 flex items-center justify-center text-white font-black text-xl">
-              {callerName[0]?.toUpperCase()}
+              {name.charAt(0).toUpperCase()}
             </div>
             <div className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-emerald-500 border-2 border-gray-900 flex items-center justify-center">
-              {callType === 'video' ? <Video size={10} className="text-white" /> : <Phone size={10} className="text-white" />}
+              {kind === 'video' ? <Video size={10} className="text-white" /> : <Phone size={10} className="text-white" />}
             </div>
           </div>
-          <div>
-            <p className="text-white font-bold text-base">{callerName}</p>
+          <div className="min-w-0">
+            <p className="text-white font-bold text-base truncate" title={name}>{name}</p>
             <p className="text-gray-400 text-sm flex items-center gap-1.5">
               <PhoneIncoming size={12} className="text-emerald-400" />
-              Incoming {callType} call · {elapsed}s
+              Incoming {kind} call · {elapsed}s
             </p>
           </div>
         </div>
@@ -670,7 +711,7 @@ export const IncomingCallBanner = ({ callerName, callType, onAccept, onDecline }
             <PhoneOff size={16} /> Decline
           </button>
           <button onClick={onAccept} className="flex-1 py-3 rounded-lg bg-violet-600 hover:bg-violet-700 text-white font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95">
-            {callType === 'video' ? <Video size={16} /> : <Phone size={16} />} Accept
+            {kind === 'video' ? <Video size={16} /> : <Phone size={16} />} Accept
           </button>
         </div>
       </div>

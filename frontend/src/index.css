@@ -2,15 +2,24 @@
 @import "tailwindcss";
 
 /*
- * "White and Violet" brand theme — Tailwind v4 CSS-first config.
- * Anything declared here under @theme generates real utility classes
- * project-wide (bg-violet-900, text-surface-secondary, border-border-subtle,
- * etc.) — this is the v4 replacement for the old tailwind.config.js
- * `theme.extend.colors` object.
+ * Design tokens — Tailwind v4 CSS-first config (F1, one naming system).
  *
- * The legacy --color-slack-* tokens below (in the old :root block) are left
- * in place — several other views (HomeView, Directory, ActivityView, etc.)
- * still reference them and are out of scope for this redesign pass.
+ * Every variable under @theme becomes a utility (`bg-brand`, `text-fg-muted`,
+ * `border-line`, …) AND a CSS custom property on :root. Utilities reference
+ * the property (`background-color: var(--color-brand)`), so a future dark
+ * theme only has to redefine these variables under a theme selector — no
+ * component class changes (approved: light-only for now, dark-ready).
+ *
+ * Layers:
+ *  1. Palette scales (violet) — raw brand colours, kept for existing classes.
+ *  2. Semantic tokens (brand, fg, surface, border, status, sidebar, focus) —
+ *     what new components (src/components/ui/*) use.
+ *
+ * The former `--color-slack-*` variables were removed: they were declared
+ * outside @theme, so no `*-slack-*` utility class ever generated CSS (28
+ * class usages in HomeView/Directory/ActivityView/MoreView render without
+ * that colour today). Those usages are left untouched in F1 so nothing
+ * changes visually; they move to semantic tokens in the F6 visual pass.
  */
 @theme {
   /* Violet — primary brand color, 50 (lightest) to 950 (near-black) */
@@ -35,26 +44,44 @@
   --color-border-subtle: #ece9f4;
   --color-border-default: #e1deec;
   --color-border-strong: #c9c4dc;
+
+  /* ---- Semantic tokens (light theme values) ---- */
+  /* Brand / primary actions */
+  --color-brand: var(--color-violet-600);
+  --color-brand-hover: var(--color-violet-700);
+  --color-brand-soft: var(--color-violet-50);
+  --color-brand-muted: var(--color-violet-100);
+  --color-on-brand: #ffffff;
+  /* Foreground (text) */
+  --color-fg: #111827;
+  --color-fg-muted: #4b5563;
+  --color-fg-subtle: #9ca3af;
+  /* Neutral lines (the app-wide default border colour) */
+  --color-line: #e5e7eb;
+  /* Status */
+  --color-danger: #dc2626;
+  --color-danger-hover: #b91c1c;
+  --color-danger-soft: #fef2f2;
+  --color-success: #059669;
+  --color-success-soft: #ecfdf5;
+  --color-warning: #b45309;
+  --color-warning-soft: #fffbeb;
+  /* Chrome */
+  --color-sidebar: var(--color-violet-950);
+  --color-focus: var(--color-violet-500);
 }
 
 @layer base {
   :root {
     --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
     --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-
-    --color-slack-purple: #4a154b;
-    --color-slack-active: #121013;
-    --color-slack-sidebar: #3f0e40;
-    --color-slack-sidebar-hover: #350d36;
-    --color-slack-sidebar-active: #1164a3;
-    --color-slack-green: #2bac76;
   }
 
   body {
     font-family: var(--font-sans);
     font-size: 14px;
-    color: #111827;
-    background-color: white;
+    color: var(--color-fg);
+    background-color: var(--color-surface);
     overflow: hidden;
     margin: 0;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
@@ -63,7 +90,7 @@
   }
 
   * {
-    border-color: #e5e7eb;
+    border-color: var(--color-line);
   }
 }
 
@@ -232,4 +259,212 @@
 
 .elevation-5 {
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+}
+
+/* ── P2: rich-text messages (composer and rendered messages share these) ── */
+.rich-text p { margin: 0; }
+.rich-text p + p { margin-top: 0.25rem; }
+.rich-text h1 { font-size: 1.375rem; font-weight: 800; line-height: 1.3; margin: 0.25rem 0; }
+.rich-text h2 { font-size: 1.15rem; font-weight: 700; line-height: 1.35; margin: 0.25rem 0; }
+.rich-text h3 { font-size: 1rem; font-weight: 700; line-height: 1.4; margin: 0.25rem 0; }
+.rich-text ul, .rich-text ol { padding-left: 1.4rem; margin: 0.25rem 0; }
+.rich-text ul { list-style: disc; }
+.rich-text ol { list-style: decimal; }
+.rich-text li > p { margin: 0; }
+.rich-text blockquote {
+  border-left: 3px solid var(--color-border-strong);
+  padding-left: 0.75rem;
+  margin: 0.25rem 0;
+  color: var(--color-fg-muted);
+}
+.rich-text code {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  background: var(--color-surface-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 0.3rem;
+  padding: 0.05rem 0.3rem;
+  color: var(--color-fg);
+}
+.rich-text pre {
+  background: var(--color-surface-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  margin: 0.35rem 0;
+  overflow-x: auto;
+  white-space: pre;
+}
+.rich-text pre code { background: transparent; border: 0; padding: 0; font-size: 0.85rem; }
+.rich-text a { color: var(--color-brand); text-decoration: underline; text-underline-offset: 2px; word-break: break-word; }
+.rich-text a:hover { color: var(--color-brand-hover); }
+.rich-text u { text-underline-offset: 2px; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * P2 Phase J — dark theme.
+ * Class-based (`html.dark`, set by lib/theme.ts from the user's choice or the
+ * OS). The design tokens are redefined here, so every component built on
+ * them (bg-surface, text-fg, border-line, bg-brand…) switches automatically.
+ * ───────────────────────────────────────────────────────────────────────── */
+@custom-variant dark (&:where(.dark, .dark *));
+
+html.dark {
+  color-scheme: dark;
+  --color-surface: #17151e;
+  --color-surface-secondary: #1d1a26;
+  --color-surface-tertiary: #262230;
+  --color-border-subtle: #2b2738;
+  --color-border-default: #363146;
+  --color-border-strong: #4a4460;
+  --color-brand: var(--color-violet-500);
+  --color-brand-hover: var(--color-violet-400);
+  --color-brand-soft: rgb(139 92 246 / 0.14);
+  --color-brand-muted: rgb(139 92 246 / 0.26);
+  --color-on-brand: #ffffff;
+  --color-fg: #ece9f6;
+  --color-fg-muted: #b4aec8;
+  --color-fg-subtle: #8a839f;
+  --color-line: #2f2b3d;
+  --color-danger: #f87171;
+  --color-danger-hover: #fca5a5;
+  --color-danger-soft: rgb(248 113 113 / 0.14);
+  --color-success: #34d399;
+  --color-success-soft: rgb(52 211 153 / 0.14);
+  --color-warning: #fbbf24;
+  --color-warning-soft: rgb(251 191 36 / 0.14);
+  --color-sidebar: #110f17;
+  --color-focus: var(--color-violet-400);
+}
+
+/*
+ * Compatibility layer for older screens that still hard-code light Tailwind
+ * colours (bg-white, text-gray-900, border-gray-200…). In dark mode those map
+ * onto the tokens above. Same layer and specificity as the utilities they
+ * replace (declared later, so they win), which keeps hover/group-hover and
+ * other variants working on top of them.
+ * Surfaces that are dark by design (the call screen) opt out with
+ * `.theme-fixed`.
+ */
+@layer utilities {
+  :where(html.dark) .bg-white:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-white:hover:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-surface); }
+  :where(html.dark) .bg-gray-50:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-gray-50:hover:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-gray-50\/70:hover:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-surface-secondary); }
+  :where(html.dark) .bg-gray-100:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-gray-100:hover:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .bg-gray-200:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-gray-200:hover:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-surface-tertiary); }
+  :where(html.dark) .text-gray-900:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-gray-800:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:text-gray-900:hover:where(:not(.theme-fixed, .theme-fixed *)) { color: var(--color-fg); }
+  :where(html.dark) .text-gray-700:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-gray-600:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:text-gray-700:hover:where(:not(.theme-fixed, .theme-fixed *)) { color: var(--color-fg-muted); }
+  :where(html.dark) .text-gray-500:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-gray-400:where(:not(.theme-fixed, .theme-fixed *)) { color: var(--color-fg-subtle); }
+  :where(html.dark) .border-gray-100:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .border-gray-200:where(:not(.theme-fixed, .theme-fixed *)) { border-color: var(--color-line); }
+  :where(html.dark) .border-gray-300:where(:not(.theme-fixed, .theme-fixed *)) { border-color: var(--color-border-strong); }
+  :where(html.dark) .bg-violet-50:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-violet-50:hover:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-brand-soft); }
+  :where(html.dark) .bg-violet-100:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-violet-100:hover:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-brand-muted); }
+  :where(html.dark) .border-violet-100:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .border-violet-200:where(:not(.theme-fixed, .theme-fixed *)) { border-color: var(--color-border-strong); }
+  :where(html.dark) .bg-red-50:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-red-50:hover:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-danger-soft); }
+  :where(html.dark) .bg-green-50:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .bg-emerald-50:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-success-soft); }
+  :where(html.dark) .bg-amber-50:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .bg-yellow-50:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-warning-soft); }
+  :where(html.dark) .from-white:where(:not(.theme-fixed, .theme-fixed *)) { --tw-gradient-from: var(--color-surface); }
+  :where(html.dark) .to-gray-50:where(:not(.theme-fixed, .theme-fixed *)) { --tw-gradient-to: var(--color-surface-secondary); }
+  :where(html.dark) .from-amber-50:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .via-yellow-50:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .to-amber-50:where(:not(.theme-fixed, .theme-fixed *)) { --tw-gradient-from: var(--color-warning-soft); --tw-gradient-via: var(--color-warning-soft); --tw-gradient-to: var(--color-warning-soft); }
+  :where(html.dark) .from-red-50:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .to-pink-50:where(:not(.theme-fixed, .theme-fixed *)) { --tw-gradient-from: var(--color-danger-soft); --tw-gradient-to: var(--color-danger-soft); }
+}
+html.dark ::placeholder { color: var(--color-fg-subtle); }
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * P3 — dark-mode compatibility, second pass (found by the light/dark visual
+ * audit): legacy light gradients and borders, tinted backgrounds, and the
+ * strong 600–900 text colours that were unreadable on dark surfaces. Same
+ * layer and specificity rules as the P2 block above.
+ * ───────────────────────────────────────────────────────────────────────── */
+@layer utilities {
+  /* Surfaces, borders and gradients */
+  :where(html.dark) .bg-\[\#faf9fa\]:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-surface-secondary); }
+  :where(html.dark) .border-gray-50:where(:not(.theme-fixed, .theme-fixed *)) { border-color: var(--color-line); }
+  :where(html.dark) .from-gray-50:where(:not(.theme-fixed, .theme-fixed *)) { --tw-gradient-from: var(--color-surface-secondary); }
+  :where(html.dark) .to-white:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .via-white:where(:not(.theme-fixed, .theme-fixed *)) { --tw-gradient-to: var(--color-surface); --tw-gradient-via: var(--color-surface); }
+  :where(html.dark) .bg-violet-200:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-violet-200:hover:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .bg-purple-50:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-purple-50:hover:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-brand-muted); }
+  :where(html.dark) .bg-red-100:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-red-100:hover:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-danger-soft); }
+  :where(html.dark) .bg-amber-100:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .bg-yellow-100:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .bg-orange-100:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-amber-50:hover:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-warning-soft); }
+  :where(html.dark) .bg-green-100:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .bg-emerald-100:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:bg-green-50:hover:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-success-soft); }
+  :where(html.dark) .bg-blue-50:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .bg-blue-100:where(:not(.theme-fixed, .theme-fixed *)) { background-color: rgb(96 165 250 / 0.14); }
+  :where(html.dark) .border-red-200:where(:not(.theme-fixed, .theme-fixed *)) { border-color: rgb(248 113 113 / 0.35); }
+  :where(html.dark) .border-amber-200:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .border-yellow-200:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .border-orange-200:where(:not(.theme-fixed, .theme-fixed *)) { border-color: rgb(251 191 36 / 0.35); }
+  :where(html.dark) .border-green-200:where(:not(.theme-fixed, .theme-fixed *)) { border-color: rgb(52 211 153 / 0.35); }
+  :where(html.dark) .border-blue-200:where(:not(.theme-fixed, .theme-fixed *)) { border-color: rgb(96 165 250 / 0.35); }
+
+  /* Strong text colours → lighter tones that keep contrast on dark surfaces */
+  :where(html.dark) .text-violet-600:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-violet-700:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-violet-800:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-purple-600:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-purple-700:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-\[\#350d36\]:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:text-violet-600:hover:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:text-violet-700:hover:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:text-purple-900:hover:where(:not(.theme-fixed, .theme-fixed *)) { color: var(--color-violet-300); }
+  :where(html.dark) .text-red-600:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-red-700:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-red-800:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:text-red-600:hover:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:text-red-700:hover:where(:not(.theme-fixed, .theme-fixed *)) { color: var(--color-danger); }
+  :where(html.dark) .text-amber-600:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-amber-700:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-amber-800:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-amber-900:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-yellow-700:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-orange-700:where(:not(.theme-fixed, .theme-fixed *)) { color: var(--color-warning); }
+  :where(html.dark) .text-green-600:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-green-700:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-emerald-600:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-emerald-700:where(:not(.theme-fixed, .theme-fixed *)) { color: var(--color-success); }
+  :where(html.dark) .text-blue-600:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .text-blue-700:where(:not(.theme-fixed, .theme-fixed *)),
+  :where(html.dark) .hover\:text-blue-600:hover:where(:not(.theme-fixed, .theme-fixed *)) { color: #93c5fd; }
+
+  /* Brand-plum buttons/marks from the sign-in screen read as brand violet */
+  :where(html.dark) .bg-\[\#350d36\]:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-brand); }
+  :where(html.dark) .hover\:bg-\[\#4a154b\]:hover:where(:not(.theme-fixed, .theme-fixed *)) { background-color: var(--color-violet-600); }
+}
+
+/* P3 — respect the OS "reduce motion" setting everywhere. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

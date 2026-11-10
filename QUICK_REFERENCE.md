@@ -22,11 +22,11 @@ npm run dev
 
 ### Regular User
 - **Email**: `test@example.com`
-- **Password**: `password123`
+- **Password**: `<SEED_USER_PASSWORD>`
 
 ### Admin User
 - **Email**: `admin@slack.com`
-- **Password**: `admin123`
+- **Password**: `<SEED_ADMIN_PASSWORD>`
 
 ---
 

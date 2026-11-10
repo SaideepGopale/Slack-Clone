@@ -1,6 +1,6 @@
 import { groupReactions } from '../../lib/reactionSummary';
 import { prisma } from '../../lib/prisma';
-import { isChannelMember } from '../../sockets/channelAccess';
+import { checkChannelContent, getChannelAccess, isMessageVisible, visibleHistoryFilter } from '../../sockets/channelAccess';
 
 class HttpError extends Error {
   status: number;
@@ -57,14 +57,52 @@ export interface MessagePage {
 export const getChannelMessages = async (
   channelId: string,
   cursor?: string,
-  limit: number = DEFAULT_PAGE_SIZE
+  limit: number = DEFAULT_PAGE_SIZE,
+  after?: string,
+  // The requesting member's visible-history window (group DM members added
+  // without shared history). Omitted = full history.
+  history: { historyFrom: Date | null } = { historyFrom: null }
 ): Promise<MessagePage> => {
   const take = Math.min(Math.max(limit, 1), MAX_PAGE_SIZE);
+  const visible = visibleHistoryFilter(history);
+
+  // Reconnect backfill: everything newer than the last message the client
+  // already has, oldest-first, so it can be appended in order. The anchor
+  // must belong to this channel — a foreign id is rejected rather than used
+  // as a position in someone else's history.
+  if (after) {
+    const anchor = await prisma.message.findFirst({
+      where: { id: after, channelId, ...visible },
+      select: { id: true, createdAt: true },
+    });
+    if (!anchor) throw new HttpError(400, 'Unknown "after" message for this channel.');
+    const newer = await prisma.message.findMany({
+      where: {
+        channelId,
+        parentId: null,
+        ...visible,
+        OR: [{ createdAt: { gt: anchor.createdAt } }, { createdAt: anchor.createdAt, id: { gt: anchor.id } }],
+      },
+      include: messageInclude,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: take + 1,
+    });
+    return {
+      messages: newer.slice(0, take).map(withGroupedReactions),
+      nextCursor: null,
+      hasMore: newer.length > take,
+    };
+  }
+
+  if (cursor) {
+    const cursorRow = await prisma.message.findFirst({ where: { id: cursor, channelId, ...visible }, select: { id: true } });
+    if (!cursorRow) throw new HttpError(400, 'Unknown cursor for this channel.');
+  }
 
   const rows = await prisma.message.findMany({
     // Thread replies are fetched separately, on demand, by getThread below —
     // the channel's main list only ever shows top-level messages now.
-    where: { channelId, parentId: null },
+    where: { channelId, parentId: null, ...visible },
     include: messageInclude,
     // `id` is a required tiebreaker, not decoration: two messages can land in
     // the same millisecond (createdAt has ms precision, and a busy channel
@@ -109,12 +147,17 @@ export const getThread = async (userId: string, messageId: string) => {
   });
   if (!parent) throw new HttpError(404, 'Message not found');
 
-  if (!(await isChannelMember(userId, parent.channelId))) {
+  const access = await getChannelAccess(userId, parent.channelId);
+  if (!access) {
     throw new HttpError(403, 'You are not a member of this channel.');
   }
+  // A member without shared history can't open threads that predate them.
+  if (!isMessageVisible(access, parent)) throw new HttpError(404, 'Message not found');
 
+  // Scoped to the parent's channel: a reply row from another channel
+  // (possible before message:send validated parentId) is never returned.
   const replies = await prisma.message.findMany({
-    where: { parentId: messageId },
+    where: { parentId: messageId, channelId: parent.channelId, ...visibleHistoryFilter(access) },
     include: messageInclude,
     orderBy: { createdAt: 'asc' },
   });
@@ -125,11 +168,28 @@ export const getThread = async (userId: string, messageId: string) => {
   };
 };
 
-export const searchChannelMessages = async (channelId: string, query: string) => {
+export const searchChannelMessages = async (
+  channelId: string,
+  query: string,
+  history: { historyFrom: Date | null } = { historyFrom: null }
+) => {
   const messages = await prisma.message.findMany({
-    where: { channelId, content: { contains: query, mode: 'insensitive' } },
+    where: { channelId, content: { contains: query, mode: 'insensitive' }, ...visibleHistoryFilter(history) },
     include: messageInclude,
     orderBy: { createdAt: 'desc' },
+    take: 50,
+  });
+  return messages.map(withGroupedReactions);
+};
+
+// P2 Phase G: the conversation's pinned top-level messages, newest first,
+// within the member's visible-history window. Independent of how much
+// history the client has paged in.
+export const getPinnedMessages = async (channelId: string, history: { historyFrom: Date | null } = { historyFrom: null }) => {
+  const messages = await prisma.message.findMany({
+    where: { channelId, parentId: null, isPinned: true, ...visibleHistoryFilter(history) },
+    include: messageInclude,
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: 50,
   });
   return messages.map(withGroupedReactions);
@@ -189,16 +249,19 @@ export const adminDeleteMessage = async (messageId: string): Promise<AdminDelete
 export const toggleReaction = async (userId: string, messageId: string, emoji: string) => {
   const message = await prisma.message.findUnique({
     where: { id: messageId },
-    select: { channelId: true },
+    select: { channelId: true, createdAt: true },
   });
   if (!message) throw new HttpError(404, 'Message not found');
 
-  // REST has no "already in the channel's socket room" shortcut to lean on
-  // (see channelAccess.ts's isInChannelRoom) — this is a real DB check, same
-  // one requireChannelMembership uses for the channel-scoped message routes.
-  if (!(await isChannelMember(userId, message.channelId))) {
+  // Same channel + workspace membership check requireChannelMembership uses.
+  const access = await getChannelAccess(userId, message.channelId);
+  if (!access) {
     throw new HttpError(403, 'You are not a member of this channel.');
   }
+  if (!isMessageVisible(access, message)) throw new HttpError(404, 'Message not found');
+  // Batch 3/D: reactions follow the content rules (archived = read-only).
+  const denial = await checkChannelContent(userId, access, 'react');
+  if (denial) throw new HttpError(access.archived ? 409 : 403, denial);
 
   const existing = await prisma.reaction.findUnique({
     where: { userId_messageId_emoji: { userId, messageId, emoji } },

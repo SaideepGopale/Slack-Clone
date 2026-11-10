@@ -3,6 +3,11 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import './lib/api';
+import { applyTheme, watchSystemTheme } from './lib/theme';
+
+// P2 Phase J: apply the saved light/dark choice before the first paint.
+applyTheme();
+watchSystemTheme();
 
 // Suppress benign Vite/WebSocket rejections in development environment
 if (typeof window !== 'undefined') {

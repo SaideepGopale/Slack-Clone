@@ -2,8 +2,11 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { Prisma, Role } from '@prisma/client';
 import { JWT_SECRET } from '../../config/env';
+import { isValidEmail } from '../../lib/email';
 import { prisma } from '../../lib/prisma';
 import { generateOtp, hashOtp, MAX_OTP_ATTEMPTS, OTP_TTL_MS, verifyOtp as verifyOtpCode } from '../../lib/otp';
+import { hasLiveInvitation, hasSignupConflict, lockSignupEmail, rethrowAsDuplicateAccount } from '../../lib/signupEmail';
+import { INVITE_ONLY_MESSAGE } from '../../middleware/inviteOnlySignup.middleware';
 import { sendOtpEmail, sendResetPasswordEmail } from '../../utils/mailer';
 import { DEFAULT_WORKSPACE_SLUG } from '../workspaces/workspaces.service';
 
@@ -23,7 +26,8 @@ class HttpError extends Error {
 const signToken = (payload: { id: string; username: string; role: Role }) =>
   jwt.sign(payload, JWT_SECRET as string, { expiresIn: '7d' });
 
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// E-mail format: isValidEmail (lib/email.ts) caps the length before the
+// pattern runs — the pattern alone could block the event loop (FA-SEC-02).
 
 // Channels now belong to a Workspace, so "General" is no longer globally
 // unique — a self-serve signup has no "pick a workspace" step yet, so it
@@ -83,25 +87,33 @@ export const signup = async (username: string, email: string, password: string) 
   if (!username || !email || !password) {
     throw new HttpError(400, 'username, email and password are required');
   }
-  if (!EMAIL_REGEX.test(email)) {
+  if (!isValidEmail(email)) {
     throw new HttpError(400, 'Invalid email format');
   }
   if (password.length < 6) {
     throw new HttpError(400, 'Password must be at least 6 characters long');
   }
 
-  const existingUser = await prisma.user.findFirst({ where: { OR: [{ email }, { username }] } });
-  if (existingUser) {
+  // Stage 6A (AUTH-1): the address matches in any letter case (lib/signupEmail.ts).
+  if (await hasSignupConflict(prisma, email, username)) {
     throw new HttpError(400, 'A user with this email or username already exists');
   }
 
   const hashedPassword = await bcrypt.hash(password, 12);
 
   const user = await prisma.$transaction(async (tx) => {
+    // Re-checked under a per-address lock: concurrent sign-ups for one
+    // address (any letter case) create exactly one account.
+    await lockSignupEmail(tx, email);
+    if (await hasSignupConflict(tx, email, username)) {
+      throw new HttpError(400, 'A user with this email or username already exists');
+    }
+    // Stage 6C (R1): the invitation the gate accepted must still be live — held until commit.
+    if (!(await hasLiveInvitation(tx, email))) throw new HttpError(403, INVITE_ONLY_MESSAGE);
     const newUser = await tx.user.create({ data: { username, email, password: hashedPassword } });
     const defaultWorkspaceId = await joinGeneralChannel(tx, newUser.id);
     return { ...newUser, lastActiveWorkspaceId: defaultWorkspaceId };
-  });
+  }).catch(rethrowAsDuplicateAccount('A user with this email or username already exists'));
 
   const token = signToken({ id: user.id, username: user.username, role: user.role });
   return {
@@ -126,15 +138,16 @@ export const requestSignupOtp = async (username: string, email: string, password
   if (!username || !email || !password) {
     throw new HttpError(400, 'username, email and password are required');
   }
-  if (!EMAIL_REGEX.test(email)) {
+  if (!isValidEmail(email)) {
     throw new HttpError(400, 'Invalid email format');
   }
   if (password.length < 6) {
     throw new HttpError(400, 'Password must be at least 6 characters long');
   }
 
-  const existingUser = await prisma.user.findFirst({ where: { OR: [{ email }, { username }] } });
-  if (existingUser) {
+  // Stage 6A (AUTH-1): any letter case. Early answer only — verifySignupOtp
+  // re-checks under the per-address lock when it creates the account.
+  if (await hasSignupConflict(prisma, email, username)) {
     throw new HttpError(400, 'A user with this email or username already exists');
   }
 
@@ -194,15 +207,20 @@ export const verifySignupOtp = async (email: string, code: string) => {
 
   // Re-check uniqueness: someone could have registered this exact
   // email/username directly in the window since the code was requested.
-  const existingUser = await prisma.user.findFirst({
-    where: { OR: [{ email: pending.email }, { username: pending.username }] },
-  });
-  if (existingUser) {
+  // Stage 6A (AUTH-1): any letter case (lib/signupEmail.ts).
+  if (await hasSignupConflict(prisma, pending.email, pending.username)) {
     await prisma.oTPVerification.delete({ where: { email } }).catch(() => {});
     throw new HttpError(400, 'A user with this email or username already exists.');
   }
 
   const user = await prisma.$transaction(async (tx) => {
+    // Re-checked under the per-address lock shared with direct sign-up.
+    await lockSignupEmail(tx, pending.email);
+    if (await hasSignupConflict(tx, pending.email, pending.username)) {
+      throw new HttpError(400, 'A user with this email or username already exists.');
+    }
+    // Stage 6C (R1): the invitation the gate accepted must still be live — held until commit.
+    if (!(await hasLiveInvitation(tx, pending.email))) throw new HttpError(403, INVITE_ONLY_MESSAGE);
     const newUser = await tx.user.create({
       data: { username: pending.username, email: pending.email, password: pending.password },
     });
@@ -211,7 +229,7 @@ export const verifySignupOtp = async (email: string, code: string) => {
     await tx.oTPVerification.delete({ where: { email } });
 
     return { ...newUser, lastActiveWorkspaceId: defaultWorkspaceId };
-  });
+  }).catch(rethrowAsDuplicateAccount('A user with this email or username already exists.'));
 
   const token = signToken({ id: user.id, username: user.username, role: user.role });
   return {

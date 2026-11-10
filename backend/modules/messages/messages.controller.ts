@@ -1,28 +1,39 @@
 import { Response, NextFunction } from 'express';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
+import { ChannelScopedRequest } from '../../middleware/channelAccess.middleware';
 import { broadcastReactionUpdate } from '../../sockets/registry';
 import * as messagesService from './messages.service';
 
-export const getChannelMessagesHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+export const getChannelMessagesHandler = async (req: ChannelScopedRequest, res: Response, next: NextFunction) => {
   try {
     const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+    const after = typeof req.query.after === 'string' ? req.query.after : undefined;
     const limit = req.query.limit ? Number(req.query.limit) : undefined;
 
     const page = await messagesService.getChannelMessages(
       req.params.id,
       cursor,
-      Number.isFinite(limit) ? limit : undefined
+      Number.isFinite(limit) ? limit : undefined,
+      after,
+      req.channelAccess
     );
     res.json(page);
   } catch (err) { next(err); }
 };
 
-export const searchChannelMessagesHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+export const searchChannelMessagesHandler = async (req: ChannelScopedRequest, res: Response, next: NextFunction) => {
   try {
     const { q } = req.query;
-    if (!q) return res.json([]);
-    const messages = await messagesService.searchChannelMessages(req.params.id, q as string);
+    if (!q || typeof q !== 'string') return res.json([]);
+    const messages = await messagesService.searchChannelMessages(req.params.id, q, req.channelAccess);
     res.json(messages);
+  } catch (err) { next(err); }
+};
+
+// GET /api/channels/:id/pinned — P2 Phase G (membership checked by the route).
+export const getPinnedMessagesHandler = async (req: ChannelScopedRequest, res: Response, next: NextFunction) => {
+  try {
+    res.json(await messagesService.getPinnedMessages(req.params.id, req.channelAccess));
   } catch (err) { next(err); }
 };
 

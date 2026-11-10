@@ -42,6 +42,7 @@
     "@types/node": "^22.14.0",
     "@types/sanitize-html": "^2.16.1",
     "@types/supertest": "^6.0.2",
+    "socket.io-client": "4.8.3",
     "supertest": "^7.0.0",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

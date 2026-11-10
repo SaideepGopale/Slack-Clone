@@ -1,11 +1,11 @@
 import axios from 'axios';
-import EmojiPicker, { Theme } from 'emoji-picker-react';
-import { Hash, Loader2, X } from 'lucide-react';
+import { EmojiPicker } from '../ui/EmojiPicker';
+import { Hash, Loader2, Lock, Megaphone, X } from 'lucide-react';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { useWorkspace } from '../../pages/workspace/WorkspaceContext';
-import { Channel } from '../../types';
+import { Channel, ChannelVisibility } from '../../types';
 
 interface CreateChannelModalProps {
   isOpen: boolean;
@@ -18,6 +18,8 @@ export const CreateChannelModal = ({ isOpen, onClose }: CreateChannelModalProps)
   const [icon, setIcon] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [visibility, setVisibility] = useState<ChannelVisibility>('PUBLIC');
+  const [isAnnouncement, setIsAnnouncement] = useState(false);
   const { workspaceId, addChannel } = useWorkspace();
   const navigate = useNavigate();
 
@@ -28,6 +30,8 @@ export const CreateChannelModal = ({ isOpen, onClose }: CreateChannelModalProps)
     setDescription('');
     setIcon(null);
     setShowEmojiPicker(false);
+    setVisibility('PUBLIC');
+    setIsAnnouncement(false);
     onClose();
   };
 
@@ -46,6 +50,8 @@ export const CreateChannelModal = ({ isOpen, onClose }: CreateChannelModalProps)
         name: trimmedName,
         description: description.trim() || undefined,
         icon: icon || undefined,
+        visibility,
+        isAnnouncement,
       });
 
       addChannel(res.data);
@@ -105,12 +111,10 @@ export const CreateChannelModal = ({ isOpen, onClose }: CreateChannelModalProps)
                   {showEmojiPicker && (
                     <div className="absolute top-full left-0 mt-2 z-50 shadow-2xl rounded-xl border border-gray-100 overflow-hidden bg-white animate-in fade-in zoom-in-95 duration-150">
                       <EmojiPicker
-                        onEmojiClick={(emojiData) => {
-                          setIcon(emojiData.emoji);
+                        onPick={(emoji) => {
+                          setIcon(emoji);
                           setShowEmojiPicker(false);
                         }}
-                        theme={Theme.LIGHT}
-                        lazyLoadEmojis
                       />
                     </div>
                   )}
@@ -141,6 +145,52 @@ export const CreateChannelModal = ({ isOpen, onClose }: CreateChannelModalProps)
                 className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm font-medium text-gray-900 outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-all resize-none"
               />
             </div>
+
+            <fieldset>
+              <legend className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Channel type</legend>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  ['PUBLIC', Hash, 'Public', 'Anyone in the workspace can find and join'],
+                  ['PRIVATE', Lock, 'Private', 'Only invited people can see it'],
+                ] as const).map(([value, Icon, label, hint]) => (
+                  <label
+                    key={value}
+                    className={`flex flex-col gap-1 rounded-xl border px-3 py-2.5 cursor-pointer transition-all ${
+                      visibility === value ? 'border-violet-500 bg-violet-50 ring-2 ring-violet-100' : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <span className="flex items-center gap-2 text-sm font-bold text-gray-900">
+                      <input
+                        type="radio"
+                        name="channel-visibility"
+                        value={value}
+                        checked={visibility === value}
+                        onChange={() => setVisibility(value)}
+                        className="accent-violet-600"
+                      />
+                      <Icon size={14} aria-hidden="true" /> {label}
+                    </span>
+                    <span className="text-[11px] text-gray-500 leading-snug">{hint}</span>
+                  </label>
+                ))}
+              </div>
+              <label className="mt-2 flex items-start gap-2 rounded-xl border border-gray-200 px-3 py-2.5 cursor-pointer hover:border-gray-300">
+                <input
+                  type="checkbox"
+                  checked={isAnnouncement}
+                  onChange={(e) => setIsAnnouncement(e.target.checked)}
+                  className="mt-0.5 accent-violet-600"
+                />
+                <span>
+                  <span className="flex items-center gap-1.5 text-sm font-bold text-gray-900">
+                    <Megaphone size={14} aria-hidden="true" /> Announcement channel
+                  </span>
+                  <span className="block text-[11px] text-gray-500 leading-snug">
+                    Only owners, moderators and workspace admins post; everyone can reply in threads and react.
+                  </span>
+                </span>
+              </label>
+            </fieldset>
           </div>
 
           <div className="flex gap-3 mt-8">

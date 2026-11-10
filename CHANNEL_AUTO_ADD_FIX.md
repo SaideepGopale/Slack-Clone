@@ -155,7 +155,7 @@ All User Sidebars
 **Step 1**: Login as Admin
 ```
 Email: admin@slack.com
-Password: admin123
+Password: <SEED_ADMIN_PASSWORD>
 ```
 
 **Step 2**: Go to Admin Panel

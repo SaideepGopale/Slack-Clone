@@ -1,10 +1,12 @@
 import axios from 'axios';
 import { format } from 'date-fns';
-import { Loader2, Send, X } from 'lucide-react';
+import { AlertCircle, Loader2, Send, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Socket } from 'socket.io-client';
 import { useAuth } from '../../contexts/AuthContext';
+import { createClientId, DeliveryState, isPending, mergeMessages, PENDING_PREFIX, upsertMessage } from '../../lib/messages';
 import { sanitizeMessageHtml } from '../../lib/sanitizeHtml';
+import { isPreviewableImage } from '../../lib/chatPresentation';
 import { RichTextEditor, RichTextEditorHandle } from './RichTextEditor';
 
 interface ThreadReaction { emoji: string; count: number; users: { id: string; username: string }[]; }
@@ -15,10 +17,24 @@ interface ThreadMessage {
   content?: string;
   fileUrl?: string;
   fileName?: string;
+  fileType?: string;
+  editedAt?: string | null;
   sender: { id: string; username: string };
   createdAt: string;
   reactions: ThreadReaction[];
+  clientId?: string | null;
+  deliveryState?: DeliveryState;
+  deliveryError?: string;
 }
+
+interface ReplyPayload {
+  channelId: string;
+  content: string;
+  parentId: string;
+  clientId: string;
+}
+
+const SEND_TIMEOUT_MS = 10_000;
 
 interface ThreadPanelProps {
   messageId: string;
@@ -26,6 +42,8 @@ interface ThreadPanelProps {
   channelName: string;
   socket: Socket;
   onClose: () => void;
+  // Batch 3/D: false in archived channels (the server refuses replies there too).
+  canReply?: boolean;
 }
 
 /**
@@ -38,7 +56,7 @@ interface ThreadPanelProps {
  * lifetime of the panel so replies arrive live without needing ChatArea's
  * channel-wide message state at all.
  */
-export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose }: ThreadPanelProps) => {
+export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose, canReply = true }: ThreadPanelProps) => {
   const { user } = useAuth();
   const [parent, setParent] = useState<ThreadMessage | null>(null);
   const [replies, setReplies] = useState<ThreadMessage[]>([]);
@@ -46,6 +64,11 @@ export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose
   const [content, setContent] = useState('');
   const editorRef = useRef<RichTextEditorHandle>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const pendingRef = useRef(new Map<string, ReplyPayload>());
+  // ChatArea passes a fresh inline onClose each render; reading it through a
+  // ref keeps the subscription effect from re-running (and refetching) per render.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     let cancelled = false;
@@ -55,7 +78,8 @@ export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose
       .then(({ data }) => {
         if (cancelled) return;
         setParent({ ...data.parent, reactions: data.parent.reactions ?? [] });
-        setReplies(data.replies.map((r) => ({ ...r, reactions: r.reactions ?? [] })));
+        // Merge so live replies that arrived during the request are kept.
+        setReplies((prev) => mergeMessages(data.replies.map((r) => ({ ...r, reactions: r.reactions ?? [] })), prev));
       })
       .catch((err) => console.error('Failed to load thread:', err))
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -64,7 +88,33 @@ export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose
 
     const handleReply = (msg: ThreadMessage) => {
       if (msg.parentId !== messageId) return;
-      setReplies((prev) => (prev.some((r) => r.id === msg.id) ? prev : [...prev, { ...msg, reactions: msg.reactions ?? [] }]));
+      setReplies((prev) => upsertMessage(prev, { ...msg, reactions: msg.reactions ?? [] }));
+    };
+    const handleReplyUpdated = (msg: ThreadMessage) => {
+      if (msg.parentId !== messageId) return;
+      setReplies((prev) => prev.map((r) => (r.id === msg.id ? { ...r, ...msg, reactions: r.reactions } : r)));
+    };
+    const handleReplyDeleted = ({ parentId, id }: { parentId: string; id: string }) => {
+      if (parentId === messageId) setReplies((prev) => prev.filter((r) => r.id !== id));
+    };
+    // The parent itself can be edited (channel-level event) or deleted.
+    const handleParentUpdated = (msg: ThreadMessage) => {
+      if (msg.id === messageId) setParent((prev) => (prev ? { ...prev, ...msg, reactions: prev.reactions } : prev));
+    };
+    const handleParentDeleted = (id: string) => {
+      if (id === messageId) onCloseRef.current();
+    };
+    // Thread rooms aren't part of the server's automatic re-subscription, so
+    // rejoin after a reconnect and pick up replies sent while offline.
+    const handleResubscribe = () => {
+      socket.emit('thread:join', { messageId });
+      axios
+        .get<{ parent: ThreadMessage; replies: ThreadMessage[] }>(`/api/messages/${messageId}/thread`)
+        .then(({ data }) => {
+          if (cancelled) return;
+          setReplies((prev) => mergeMessages(prev, data.replies.map((r) => ({ ...r, reactions: r.reactions ?? [] }))));
+        })
+        .catch(() => undefined);
     };
     // Shared with ChatArea's main list — a reaction on the thread's parent or
     // any of its replies broadcasts through this same event.
@@ -74,13 +124,23 @@ export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose
     };
 
     socket.on('thread:message_received', handleReply);
+    socket.on('thread:message_updated', handleReplyUpdated);
+    socket.on('thread:message_deleted', handleReplyDeleted);
+    socket.on('message:updated', handleParentUpdated);
+    socket.on('message:deleted', handleParentDeleted);
     socket.on('message:reaction:updated', handleReactionUpdate);
+    socket.on('subscriptions:ready', handleResubscribe);
 
     return () => {
       cancelled = true;
       socket.emit('thread:leave', { messageId });
       socket.off('thread:message_received', handleReply);
+      socket.off('thread:message_updated', handleReplyUpdated);
+      socket.off('thread:message_deleted', handleReplyDeleted);
+      socket.off('message:updated', handleParentUpdated);
+      socket.off('message:deleted', handleParentDeleted);
       socket.off('message:reaction:updated', handleReactionUpdate);
+      socket.off('subscriptions:ready', handleResubscribe);
     };
   }, [messageId, socket]);
 
@@ -96,12 +156,54 @@ export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose
     }
   };
 
+  const deliver = (payload: ReplyPayload) => {
+    socket.timeout(SEND_TIMEOUT_MS).emit(
+      'message:send',
+      payload,
+      (err: Error | null, res?: { ok: boolean; error?: string; message?: ThreadMessage }) => {
+        if (!err && res?.ok && res.message) {
+          pendingRef.current.delete(payload.clientId);
+          setReplies((prev) => upsertMessage(prev, { ...res.message!, reactions: res.message!.reactions ?? [] }));
+          return;
+        }
+        const reason = err ? 'Not delivered yet — check your connection.' : res?.error ?? 'Failed to send.';
+        setReplies((prev) =>
+          prev.map((r) => (isPending(r) && r.clientId === payload.clientId ? { ...r, deliveryState: 'failed', deliveryError: reason } : r))
+        );
+      }
+    );
+  };
+
+  const retry = (clientId: string) => {
+    const payload = pendingRef.current.get(clientId);
+    if (!payload) return;
+    setReplies((prev) => prev.map((r) => (isPending(r) && r.clientId === clientId ? { ...r, deliveryState: 'pending', deliveryError: undefined } : r)));
+    deliver(payload);
+  };
+
   const handleSend = () => {
     const text = editorRef.current?.getText() ?? '';
     const html = editorRef.current?.getHTML() ?? '';
-    if (!text.trim()) return;
+    if (!text.trim() || !user) return;
 
-    socket.emit('message:send', { channelId, content: html, parentId: messageId });
+    const clientId = createClientId();
+    const payload: ReplyPayload = { channelId, content: html, parentId: messageId, clientId };
+    pendingRef.current.set(clientId, payload);
+    setReplies((prev) =>
+      mergeMessages(prev, [
+        {
+          id: `${PENDING_PREFIX}${clientId}`,
+          clientId,
+          parentId: messageId,
+          content: html,
+          sender: { id: user.id, username: user.username },
+          createdAt: new Date().toISOString(),
+          reactions: [],
+          deliveryState: 'pending',
+        },
+      ])
+    );
+    deliver(payload);
     editorRef.current?.clear();
     setContent('');
   };
@@ -140,26 +242,39 @@ export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose
           <span className="text-[11px] text-gray-400 font-medium">{format(new Date(m.createdAt), 'h:mm a')}</span>
         </div>
         {m.content && (
-          <div className="text-[14px] text-gray-800 leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeMessageHtml(m.content) }} />
+          <div className="rich-text text-[14px] text-fg leading-relaxed break-words" dangerouslySetInnerHTML={{ __html: sanitizeMessageHtml(m.content) }} />
         )}
-        {m.fileUrl && (
+        {m.editedAt && <span className="text-[11px] text-fg-subtle">(edited)</span>}
+        {m.fileUrl && isPreviewableImage(m.fileType, m.fileUrl) ? (
+          <a href={m.fileUrl} target="_blank" rel="noreferrer noopener" className="mt-2 block w-fit max-w-full">
+            <img src={m.fileUrl} alt={m.fileName || 'Shared image'} loading="lazy" className="max-h-60 max-w-full rounded-lg border border-line object-contain" />
+          </a>
+        ) : m.fileUrl ? (
           <a href={m.fileUrl} target="_blank" rel="noreferrer noopener" className="text-xs text-violet-600 underline">
             {m.fileName || 'Attachment'}
           </a>
-        )}
+        ) : null}
         {renderReactions(m)}
+        {m.deliveryState === 'pending' && <div className="mt-1 text-[11px] text-gray-400" role="status">Sending…</div>}
+        {m.deliveryState === 'failed' && m.clientId && (
+          <div className="mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-red-600" role="alert">
+            <AlertCircle size={12} aria-hidden="true" /> {m.deliveryError ?? 'Failed to send.'}
+            <button type="button" onClick={() => retry(m.clientId!)} className="underline">Retry</button>
+          </div>
+        )}
       </div>
     </div>
   );
 
   return (
-    <div className="w-[30%] min-w-[320px] max-w-[480px] flex flex-col h-full bg-white border-l border-gray-200 shadow-xl shrink-0 animate-in slide-in-from-right-8">
+    // P3: beside the conversation when there's room; over it when narrow (phones, tablets).
+    <div className="absolute inset-0 z-30 w-full @3xl/chat:static @3xl/chat:z-auto @3xl/chat:w-[30%] @3xl/chat:min-w-[320px] @3xl/chat:max-w-[480px] flex flex-col h-full bg-white border-l border-gray-200 shadow-xl shrink-0 animate-in slide-in-from-right-8">
       <div className="h-[72px] px-5 border-b border-gray-100 flex items-center justify-between shrink-0">
         <div>
           <h3 className="font-bold text-lg text-gray-900">Thread</h3>
           <p className="text-xs text-gray-500">#{channelName}</p>
         </div>
-        <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-xl transition text-gray-500">
+        <button onClick={onClose} aria-label="Close thread" className="p-2 hover:bg-gray-100 rounded-xl transition text-gray-500">
           <X size={20} />
         </button>
       </div>
@@ -184,6 +299,11 @@ export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose
         )}
       </div>
 
+      {!canReply ? (
+        <p role="status" className="p-4 border-t border-gray-100 shrink-0 text-sm text-gray-500">
+          This channel is archived — replies are closed.
+        </p>
+      ) : (
       <div className="p-4 border-t border-gray-100 shrink-0">
         <div className="border border-gray-300 rounded-xl overflow-hidden focus-within:border-violet-500 shadow-sm">
           <div className="w-full p-3">
@@ -208,6 +328,7 @@ export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 };

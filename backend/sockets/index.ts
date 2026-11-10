@@ -6,6 +6,7 @@ import { prisma } from '../lib/prisma';
 import { registerAdminHandlers } from './admin.handlers';
 import { registerCallHandlers } from './calls.handlers';
 import { registerChannelHandlers } from './channels.handlers';
+import { subscribeToMemberChannels } from './channelAccess';
 import { registerMessageHandlers } from './messages.handlers';
 import { registerPresenceHandlers } from './presence.handlers';
 import { setSocketServer } from './registry';
@@ -44,15 +45,28 @@ export const createSocketServer = (httpServer: HttpServer) => {
 
   io.on('connection', (socket) => {
     const authSocket = socket as AuthenticatedSocket;
+    // Post-authentication guard (the handshake above is unchanged): a
+    // connection must identify a concrete user before any collaboration
+    // handler is registered.
+    if (typeof authSocket.user?.id !== 'string' || !authSocket.user.id) {
+      socket.disconnect(true);
+      return;
+    }
     // Lets kickUserSockets() target every session belonging to this user
-    // (they may have multiple tabs/devices connected) without the server
-    // needing to track socket IDs per user itself.
+    // (they may have multiple tabs/devices connected). No handler ever
+    // leaves this room again (see channels.handlers.ts).
     authSocket.join(`user:${authSocket.user.id}`);
     registerPresenceHandlers(io, authSocket);
     registerChannelHandlers(io, authSocket);
     registerCallHandlers(io, authSocket);
     registerMessageHandlers(io, authSocket);
     registerAdminHandlers(io, authSocket);
+
+    // Subscribe to every authorized channel room — on first connect and on
+    // every reconnect — then tell the client it is safe to backfill.
+    subscribeToMemberChannels(authSocket)
+      .then((channelIds) => authSocket.emit('subscriptions:ready', { channelIds }))
+      .catch((err) => console.error('Failed to subscribe socket to channels:', err));
   });
 
   return io;

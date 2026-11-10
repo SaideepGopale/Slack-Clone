@@ -1,8 +1,10 @@
 import axios from 'axios';
 import { ArrowRight, Eye, EyeOff, Loader2, Lock, Shield, ShieldCheck, Zap } from 'lucide-react';
 import React, { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { useAuth } from '../../contexts/AuthContext';
+import { isInvitationToken } from '../../lib/invitationToken';
 
 interface AuthFormProps {
   // /signup lands here defaulted to the Sign Up tab instead of Login.
@@ -22,6 +24,13 @@ export const AuthForm = ({ startOnSignup = false, presetEmail }: AuthFormProps) 
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ text: string, type: 'error' | 'success' } | null>(null);
 
+  // T.21: sign-up is invitation-only. An e-mail invitation's token arrives as
+  // ?inviteToken= (InviteHandler → /signup) and goes with the sign-up request;
+  // the server verifies it. Only a well-formed token is ever sent.
+  const [searchParams] = useSearchParams();
+  const rawInviteToken = searchParams.get('inviteToken');
+  const inviteToken = isInvitationToken(rawInviteToken) ? rawInviteToken : undefined;
+
   // Admin Portal State
   const [isAdminMode, setIsAdminMode] = useState(false);
 
@@ -37,7 +46,7 @@ export const AuthForm = ({ startOnSignup = false, presetEmail }: AuthFormProps) 
         // signup for why (email delivery isn't reliably reachable in
         // production right now). AuthContext hydrates the session on
         // success; the router redirects away from here on its own.
-        await signup(username, email, password);
+        await signup(username, email, password, inviteToken);
         toast.success('Account created — welcome aboard!');
       }
     } catch (err: any) {
@@ -212,7 +221,13 @@ export const AuthForm = ({ startOnSignup = false, presetEmail }: AuthFormProps) 
 
           <div className="mb-8">
             <h2 className="text-2xl font-black text-gray-900 tracking-tight mb-2">{isLogin ? 'Sign In' : 'Create Account'}</h2>
-            <p className="text-sm text-gray-400 font-medium">{isLogin ? 'Enter your details to continue.' : 'Create your account to get started.'}</p>
+            <p className="text-sm text-gray-400 font-medium">
+              {isLogin
+                ? 'Enter your details to continue.'
+                : inviteToken
+                  ? 'Create your account to get started.'
+                  : 'Sign-up is by invitation only — open the invitation link you received.'}
+            </p>
           </div>
 
           {message && (

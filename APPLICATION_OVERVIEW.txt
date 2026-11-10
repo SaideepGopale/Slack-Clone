@@ -86,12 +86,12 @@ TECHNICAL FEATURES:
 
 REGULAR USER:
   Email:    test@example.com
-  Password: password123
+  Password: <SEED_USER_PASSWORD>
   Role:     Member
 
 ADMIN USER:
   Email:    admin@slack.com
-  Password: admin123
+  Password: <SEED_ADMIN_PASSWORD>
   Role:     Admin (all features enabled)
 
 
@@ -365,7 +365,7 @@ Problem: Backend not connecting
 
 Problem: All logins failing
   → Solution: Run: cd backend && npm run seed
-  → Test with: test@example.com / password123
+  → Test with: test@example.com / <SEED_USER_PASSWORD>
 
 Problem: Admin panel not accessible
   → Solution: Login as admin@slack.com

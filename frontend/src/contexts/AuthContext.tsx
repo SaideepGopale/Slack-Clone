@@ -6,6 +6,9 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
 
+  /** P2: keeps the in-session copy of User.lastActiveWorkspaceId current ("/" lands there). */
+  setLastActiveWorkspace?: (workspaceId: string) => void;
+
   login: (
     email: string,
     password: string
@@ -13,10 +16,13 @@ interface AuthContextType {
 
   // Direct, single-step signup — active path right now (no email/OTP
   // round-trip). Creates the account and hydrates the session immediately.
+  // T.21: sign-up is invitation-only — inviteToken is the e-mail invitation
+  // (verified by the server) that this address was invited with.
   signup: (
     username: string,
     email: string,
-    password: string
+    password: string,
+    inviteToken?: string
   ) => Promise<void>;
 
   // Step 1 of sign-up: requests an email OTP. No session exists yet — the
@@ -201,7 +207,8 @@ export const AuthProvider: React.FC<{
   const signup = async (
     username: string,
     email: string,
-    password: string
+    password: string,
+    inviteToken?: string
   ) => {
     const res = await axios.post<{
       token: string;
@@ -210,6 +217,7 @@ export const AuthProvider: React.FC<{
       username,
       email,
       password,
+      ...(inviteToken ? { inviteToken } : {}),
     });
 
     hydrateSession(res.data.token, res.data.user);
@@ -271,6 +279,19 @@ export const AuthProvider: React.FC<{
     setUser(newUser);
   };
 
+  const setLastActiveWorkspace = useCallback((workspaceId: string) => {
+    setUser((prev) => {
+      if (!prev || prev.lastActiveWorkspaceId === workspaceId) return prev;
+      const next = { ...prev, lastActiveWorkspaceId: workspaceId };
+      try {
+        localStorage.setItem('user', JSON.stringify(next));
+      } catch {
+        // storage unavailable — the in-memory session is still updated
+      }
+      return next;
+    });
+  }, []);
+
   return (
     <AuthContext.Provider
       value={{
@@ -284,6 +305,7 @@ export const AuthProvider: React.FC<{
         hydrateSession,
         logout,
         loading,
+        setLastActiveWorkspace,
       }}
     >
       {children}

@@ -1,6 +1,7 @@
 import { createServer } from 'http';
 import { app } from './app';
 import { PORT } from './config/env';
+import { reconcileSharedWorkspace } from './lib/sharedWorkspace';
 import { createSocketServer } from './sockets';
 
 // Safety net, not the primary fix — the real fix is proper try/catch inside
@@ -30,4 +31,11 @@ createSocketServer(httpServer);
 
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`Backend running on http://localhost:${PORT}`);
+  // P2: create/reconcile the shared SmartConnect Collab workspace and give
+  // existing active accounts first-time access. Idempotent and insert-only;
+  // a failure is logged, never fatal (accounts also get access lazily when
+  // they next load their workspace list).
+  reconcileSharedWorkspace()
+    .then((r) => console.log(`SmartConnect Collab ready (${r.channelIds.length} channels; ${r.membersAdded} member(s) added).`))
+    .catch((err) => console.error('SmartConnect Collab reconcile failed:', err));
 });

@@ -6,6 +6,7 @@ import { toast } from 'react-toastify';
 import { AuthForm } from '../../components/auth/AuthForm';
 import { useAuth } from '../../contexts/AuthContext';
 import { isAdminAccount } from '../../lib/admin';
+import { isInvitationToken } from '../../lib/invitationToken';
 import { LoadingScreen } from '../workspace/WorkspaceLayout';
 
 // Shown instead of redirecting into the workspace when a join link now
@@ -57,7 +58,15 @@ export const LoginPage = () => {
     if (!user || !inviteToken) return;
     if (acceptedTokenRef.current === inviteToken) return;
     acceptedTokenRef.current = inviteToken;
-    axios.post<{ workspaceId: string; generalChannelId: string }>(`/api/invitations/accept/${inviteToken}`)
+    // FA-SEC-04: the token comes from the address bar. Anything that isn't a
+    // canonical UUID (e.g. "../../admin/users/<id>/ban") is refused here,
+    // before any request is made; a valid one is still encoded into the path.
+    if (!isInvitationToken(inviteToken)) {
+      toast.error('This invitation link is invalid.');
+      navigate('/', { replace: true });
+      return;
+    }
+    axios.post<{ workspaceId: string; generalChannelId: string }>(`/api/invitations/accept/${encodeURIComponent(inviteToken)}`)
       .then(({ data }) => navigate(`/${data.workspaceId}/c/${data.generalChannelId}`, { replace: true }))
       .catch((err) => {
         toast.error(err.response?.data?.error || 'Failed to join the invited workspace.');

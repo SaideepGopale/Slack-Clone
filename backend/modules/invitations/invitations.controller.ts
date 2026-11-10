@@ -1,10 +1,13 @@
 import { Request, Response, NextFunction } from 'express';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware';
 import * as invitationsService from './invitations.service';
+import { subscribeUserToChannel } from '../../sockets/registry';
+import { addWorkspacePresence } from '../../sockets/presence.handlers';
+import { ensureOrganizationMembership } from '../organizations/organizations.service';
 
 export const listInvitationsHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
-    const invitations = await invitationsService.listInvitations(req.user!.id);
+    const invitations = await invitationsService.listInvitations(req.user!.id, req.query.workspaceId);
     res.json(invitations);
   } catch (err) { next(err); }
 };
@@ -44,6 +47,9 @@ export const getInvitationHandler = async (req: Request, res: Response, next: Ne
 export const acceptInvitationHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
   try {
     const result = await invitationsService.acceptInvitation(req.params.token, req.user!.id);
+    await ensureOrganizationMembership(result.workspaceId, req.user!.id);
+    subscribeUserToChannel(req.user!.id, result.generalChannelId);
+    addWorkspacePresence(req.user!.id, result.workspaceId);
     res.json(result);
   } catch (err) { next(err); }
 };
@@ -86,8 +92,35 @@ export const resolveJoinRequestHandler = async (req: AuthenticatedRequest, res: 
       req.user!.id,
       req.params.workspaceId,
       req.params.requestId,
-      req.body.action
+      req.body?.action
     );
-    res.json(result);
+    if ('approvedUserId' in result && result.approvedUserId && result.generalChannelId) {
+      await ensureOrganizationMembership(req.params.workspaceId, result.approvedUserId);
+      subscribeUserToChannel(result.approvedUserId, result.generalChannelId);
+      addWorkspacePresence(result.approvedUserId, req.params.workspaceId);
+    }
+    res.json({ status: result.status });
+  } catch (err) { next(err); }
+};
+
+// Batch 3/E: workspace invitation management (lib/policy 'workspace.manageInvitations').
+// GET /api/workspaces/:workspaceId/invitations
+export const listWorkspaceInvitationsHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    res.json(await invitationsService.listWorkspaceInvitations(req.user!.id, req.params.workspaceId));
+  } catch (err) { next(err); }
+};
+
+// DELETE /api/workspaces/:workspaceId/invitations/:invitationId
+export const revokeInvitationHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    res.json(await invitationsService.revokeInvitation(req.user!.id, req.params.workspaceId, req.params.invitationId));
+  } catch (err) { next(err); }
+};
+
+// DELETE /api/workspaces/:workspaceId/invite-link
+export const revokeInviteLinksHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  try {
+    res.json(await invitationsService.revokeInviteLinks(req.user!.id, req.params.workspaceId));
   } catch (err) { next(err); }
 };

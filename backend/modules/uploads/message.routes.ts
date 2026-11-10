@@ -1,9 +1,18 @@
 import { NextFunction, Request, Response, Router } from 'express';
 import multer from 'multer';
-import { AuthenticatedRequest, authenticate } from '../../middleware/auth.middleware';
+import { AuthenticatedRequest } from '../../middleware/auth.middleware';
+import { requireSessionUser } from '../../middleware/identity.middleware';
+import { userRateLimit } from '../../middleware/userRateLimit.middleware';
 import { upload } from './upload.middleware';
 
 const router = Router();
+
+/**
+ * P3: uploads are limited per user (after authentication, before a byte is
+ * streamed to storage) so one account can't exhaust the storage quota.
+ */
+export const UPLOAD_LIMIT = { max: 60, windowMs: 10 * 60_000 } as const;
+const uploadLimiter = userRateLimit(UPLOAD_LIMIT.max, UPLOAD_LIMIT.windowMs, 'Too many uploads. Please wait a few minutes and try again.');
 
 // POST /api/upload — multipart file upload, streamed straight to Cloudinary
 // (see upload.middleware.ts, which never touches local disk). Authenticated:
@@ -17,7 +26,7 @@ const router = Router();
 // it isn't expecting with a MulterError('LIMIT_UNEXPECTED_FILE'), which
 // looks identical to "no file sent" from the caller's side unless you go
 // looking for it specifically.
-router.post('/upload', authenticate, upload.single('attachment'), (req: AuthenticatedRequest, res: Response) => {
+router.post('/upload', ...requireSessionUser, uploadLimiter, upload.single('attachment'), (req: AuthenticatedRequest, res: Response) => {
   if (!req.file) {
     return res.status(400).json({ success: false, message: 'No file was uploaded.' });
   }

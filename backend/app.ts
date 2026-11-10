@@ -1,15 +1,24 @@
-import axios from 'axios';
-import * as cheerio from 'cheerio';
 import cors from 'cors';
 import express from 'express';
 import { APP_URL, NODE_ENV } from './config/env';
 import { prisma } from './lib/prisma';
 import { errorHandler } from './middleware/error.middleware';
+import { revokeSocketsOnUserDeletion } from './middleware/socketRevocation.middleware';
 import adminRoutes from './modules/admin/admin.routes';
 import authRoutes from './modules/auth/auth.routes';
 import channelsRoutes from './modules/channels/channels.routes';
 import invitationsRoutes from './modules/invitations/invitations.routes';
 import messagesRoutes, { messageActionsRouter } from './modules/messages/messages.routes';
+import previewRoutes from './modules/preview/preview.routes';
+import readStateRoutes from './modules/readState/readState.routes';
+import groupDMRoutes from './modules/groupDMs/groupDMs.routes';
+import memberRoutes from './modules/members/members.routes';
+import notificationRoutes from './modules/notifications/notifications.routes';
+import organizationRoutes from './modules/organizations/organizations.routes';
+import projectRoutes from './modules/projects/projects.routes';
+import { accountActivationRoutes, teamManagementRoutes, teamMemberRoutes } from './modules/teamManagement/teamManagement.routes';
+import { INVITE_ONLY_SIGNUP_PATHS, requireSignupInvitation, signupGateLimiter } from './middleware/inviteOnlySignup.middleware';
+import { companyOverviewRoutes } from './modules/companyOverview/companyOverview.routes';
 import uploadRoutes, { handleUploadErrors } from './modules/uploads/message.routes';
 import { uploadDir } from './modules/uploads/storage.service';
 import usersRoutes from './modules/users/users.routes';
@@ -18,6 +27,16 @@ import workspacesRoutes from './modules/workspaces/workspaces.routes';
 const allowedOrigins = [APP_URL, 'http://localhost:5173'];
 
 export const app = express();
+
+// P3 (FA-SEC-10, code part): don't advertise the framework, and send baseline
+// hardening headers on every response (the API only ever returns JSON/files).
+app.disable('x-powered-by');
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('X-Frame-Options', 'DENY');
+  next();
+});
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -46,12 +65,20 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
+// Stage 2 finalization (T.21): sign-up is invitation-only. The gate runs in
+// front of the unchanged auth router for the three sign-up endpoints only —
+// login, /me, password reset, JWT and sessions are not involved.
+app.post(INVITE_ONLY_SIGNUP_PATHS, signupGateLimiter, requireSignupInvitation);
 app.use('/api/auth', authRoutes);
 app.use('/api/channels', channelsRoutes);
 app.use('/api/channels', messagesRoutes);
 app.use('/api/messages', messageActionsRouter);
 app.use('/api/users', usersRoutes);
 app.use('/api/invitations', invitationsRoutes);
+// FA-RT-03: observes DELETE /api/admin/users/:id and, once that deletion
+// succeeds, disconnects the deleted user's live sockets. Never short-circuits;
+// the admin router below still authenticates, authorizes and deletes.
+app.use('/api/admin', revokeSocketsOnUserDeletion);
 app.use('/api/admin', adminRoutes);
 // message.routes.ts declares the full "/upload" path itself, so this mounts
 // at the API root — the resulting endpoint is still POST /api/upload,
@@ -76,26 +103,27 @@ app.use('/api', uploadRoutes);
 app.use('/api/upload', handleUploadErrors);
 app.use('/api/workspaces', workspacesRoutes);
 
-app.post('/api/preview', async (req, res) => {
-  const { url } = req.body;
-  if (!url) return res.status(400).json({ error: 'URL is required' });
-  try {
-    const response = await axios.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-      timeout: 5000,
-    });
-    const $ = cheerio.load(response.data);
-    const getMetaTag = (name: string) =>
-      $(`meta[property="og:${name}"]`).attr('content') || $(`meta[name="${name}"]`).attr('content');
-    res.json({
-      title: getMetaTag('title') || $('title').text(),
-      description: getMetaTag('description'),
-      image: getMetaTag('image'),
-      url,
-    });
-  } catch {
-    res.json({ title: url, description: '', image: '', url });
-  }
-});
+// Link previews: authenticated, rate-limited, SSRF-safe (modules/preview).
+app.use('/api', previewRoutes);
+// Persistent read state + read receipts (modules/readState).
+app.use('/api', readStateRoutes);
+// Group direct messages (modules/groupDMs).
+app.use('/api', groupDMRoutes);
+// Workspace People directory, profiles, membership removal (modules/members).
+app.use('/api', memberRoutes);
+// P2 Phase I: Activity feed and workspace search.
+app.use('/api', notificationRoutes);
+// Organizations — top of the Organization → Workspace → Channel hierarchy (Batch 3).
+app.use('/api/organizations', organizationRoutes);
+// Batch 3/C: projects (/api/workspaces/:id/projects, /api/projects/...).
+app.use('/api', projectRoutes);
+// Stage 2 (T.20): Company Admin → Team Lead provisioning (admin-only), and the
+// public one-time account activation (rate limited, issues no session).
+app.use('/api/team-management', teamManagementRoutes);
+app.use('/api/account-activation', accountActivationRoutes);
+// Stage 3 (T.22): Team Lead → Member provisioning (/api/workspaces/:id/member-invitations…) and /api/me/hierarchy.
+app.use('/api', teamMemberRoutes);
+// Stage 4 (T.23): Company Admin workspace overview — read-only metadata, admin only.
+app.use('/api/company-overview', companyOverviewRoutes);
 
 app.use(errorHandler);

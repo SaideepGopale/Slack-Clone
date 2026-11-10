@@ -1,10 +1,16 @@
-import { Calendar, Clock, HelpCircle, LogOut, Mail, Menu, Phone, Search, Settings, User as UserIcon, UserPlus } from 'lucide-react';
+import { LogOut, Mail, Menu, Settings, User as UserIcon, UserPlus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { requestMessageFocusAfterNavigation } from '../../lib/messageFocus';
+import { getThemePreference, setThemePreference, ThemePreference } from '../../lib/theme';
 import { useAuth } from '../../contexts/AuthContext';
 import { useWorkspace } from '../../pages/workspace/WorkspaceContext';
+import { useWorkspaces } from '../../pages/workspace/WorkspacesProvider';
+import { ChannelSearch, SearchScope } from './ChannelSearch';
 import { InviteMemberModal } from './InviteMemberModal';
+import { ProfileSettingsModal } from '../profile/ProfileSettingsModal';
 
-export const Header = ({ onMenuClick }: { onMenuClick?: () => void }) => {
+export const Header = ({ onMenuClick, searchScope = null }: { onMenuClick?: () => void; searchScope?: SearchScope | null }) => {
   const { user, logout } = useAuth();
   // Shares WorkspaceLayout's already-established socket via context instead
   // of calling useSocket(token) again — Header only ever renders inside
@@ -12,8 +18,19 @@ export const Header = ({ onMenuClick }: { onMenuClick?: () => void }) => {
   // opens its own real Socket.IO connection. Before this fix, every regular
   // user session was opening two full duplicate connections for no reason.
   const { workspaceId, socket } = useWorkspace();
+  // F1: invite only when the server says so (lib/policy 'workspace.manageInvitations').
+  const currentWorkspace = useWorkspaces().getWorkspace(workspaceId);
+  const canInvite = !!currentWorkspace?.capabilities?.canManageInvitations;
+  const navigate = useNavigate();
+  // P2 Phase J: light / dark / follow the system (per browser).
+  const [themePref, setThemePref] = useState<ThemePreference>(() => getThemePreference());
+  const chooseTheme = (preference: ThemePreference) => {
+    setThemePreference(preference);
+    setThemePref(preference);
+  };
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showProfileSettings, setShowProfileSettings] = useState(false);
   const [userStatus, setUserStatus] = useState<'active' | 'away' | 'in_meeting'>('active');
   const [statusEmoji, setStatusEmoji] = useState('🟢');
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -49,49 +66,48 @@ export const Header = ({ onMenuClick }: { onMenuClick?: () => void }) => {
       <div className="flex-1 flex items-center gap-3">
         <button 
           onClick={onMenuClick}
+          aria-label="Open navigation"
           className="md:hidden p-2 hover:bg-white/10 rounded-lg text-gray-200 hover:text-white transition-all active:scale-95"
         >
           <Menu size={20} />
         </button>
-        <div className="hidden md:flex flex-1 justify-end pr-4">
-          <button className="p-2 text-gray-200 hover:text-white hover:bg-white/10 rounded-lg transition-all" title="Recent activity">
-            <Clock size={18} />
-          </button>
-        </div>
       </div>
       
-      <div className="w-full max-w-2xl px-2 md:px-4 relative group">
-        <div className="absolute left-6 md:left-8 top-1/2 -translate-y-1/2 text-gray-300 group-focus-within:text-white pointer-events-none transition-all z-10">
-          <Search size={16} />
-        </div>
-        <input 
-          type="text" 
-          placeholder="Search messages, files, or people..." 
-          className="w-full bg-white/10 backdrop-blur-sm border border-white/20 focus:border-white/40 focus:bg-white/20 rounded-xl py-2.5 pl-10 md:pl-12 pr-4 text-sm text-white placeholder-gray-300 outline-none transition-all placeholder:font-normal shadow-inner"
-        />
-      </div>
+      {/* In-channel message search (F1) — scoped to the open conversation. */}
+      <ChannelSearch
+        scope={searchScope}
+        workspace={workspaceId && currentWorkspace ? { id: workspaceId, name: currentWorkspace.name } : null}
+        onOpenResult={(target) => {
+          requestMessageFocusAfterNavigation(target);
+          navigate(`/${workspaceId}/c/${target.channelId}`);
+        }}
+      />
 
       <div className="flex-1 flex justify-end items-center gap-2 relative" ref={dropdownRef}>
-        <button
-          onClick={() => setShowInviteModal(true)}
-          className="hidden sm:flex items-center gap-2 px-3.5 py-2 bg-white/10 hover:bg-white/20 border border-white/20 hover:border-white/30 rounded-xl text-sm font-semibold text-gray-100 hover:text-white transition-all active:scale-95"
-          title="Invite people to this workspace"
-        >
-          <UserPlus size={16} />
-          Invite People
-        </button>
-
-        <button className="hidden sm:flex p-2 text-gray-200 hover:text-white hover:bg-white/10 rounded-lg transition-all items-center justify-center" title="Help & Support">
-          <HelpCircle size={18} />
-        </button>
+        {canInvite && (
+          <button
+            onClick={() => setShowInviteModal(true)}
+            type="button"
+            className="hidden sm:flex items-center gap-2 px-2.5 lg:px-3.5 py-2 whitespace-nowrap bg-white/10 hover:bg-white/20 border border-white/20 hover:border-white/30 rounded-xl text-sm font-semibold text-gray-100 hover:text-white transition-colors"
+            title="Invite people to this workspace"
+            aria-label="Invite People"
+          >
+            <UserPlus size={16} aria-hidden="true" />
+            <span className="hidden lg:inline">Invite People</span>
+          </button>
+        )}
         
         {/* Profile Button (Avatar) */}
-        <div 
+        <button
+          type="button"
           onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-          className="w-9 h-9 rounded-lg bg-gradient-to-br from-[#e8912d] to-[#ff9c00] border-2 border-white/30 hover:border-white/60 flex items-center justify-center text-sm font-bold text-white cursor-pointer active:scale-95 transition-all shrink-0 select-none shadow-lg hover:shadow-xl"
+          aria-label="Account menu"
+          aria-haspopup="true"
+          aria-expanded={isDropdownOpen}
+          className="w-9 h-9 rounded-lg bg-gradient-to-br from-[#e8912d] to-[#ff9c00] border-2 border-white/30 hover:border-white/60 flex items-center justify-center text-sm font-bold text-white cursor-pointer active:scale-95 transition-all shrink-0 select-none shadow-lg hover:shadow-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
         >
           {user?.username?.substring(0, 2).toUpperCase() || '??'}
-        </div>
+        </button>
 
         {/* Dropdown Menu */}
         {isDropdownOpen && (
@@ -153,43 +169,54 @@ export const Header = ({ onMenuClick }: { onMenuClick?: () => void }) => {
               </div>
             </div>
 
-            {/* Info Section */}
-            <div className="p-3">
-              <div className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-700 rounded-lg hover:bg-gray-50 transition-all">
-                <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-                  <Mail size={16} className="text-blue-600" />
+            {/* Info Section — real account data only (F1 removed placeholder rows). */}
+            {user?.email && (
+              <div className="p-3">
+                <div className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-700 rounded-lg">
+                  <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
+                    <Mail size={16} className="text-blue-600" />
+                  </div>
+                  <span className="truncate font-medium">{user.email}</span>
                 </div>
-                <span className="truncate font-medium">{user?.email || 'samarth@example.com'}</span>
               </div>
-              
-              {/* Fake Data / Coming Soon from backend */}
-              <div className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-500 rounded-lg hover:bg-gray-50 transition-all cursor-pointer">
-                <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
-                  <Calendar size={16} className="text-purple-600" />
-                </div>
-                <span className="truncate">Add Birthdate...</span>
-              </div>
-              
-              <div className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-500 rounded-lg hover:bg-gray-50 transition-all cursor-pointer">
-                <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center shrink-0">
-                  <Phone size={16} className="text-green-600" />
-                </div>
-                <span className="truncate">Add Phone Number...</span>
-              </div>
-            </div>
+            )}
 
             <div className="h-px bg-gray-200 mx-3"></div>
 
             {/* Action Buttons */}
             <div className="p-3">
-              <button className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-100 rounded-xl transition-all font-medium group">
+              <button
+                onClick={() => { setShowProfileSettings(true); setIsDropdownOpen(false); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-100 rounded-xl transition-all font-medium group"
+              >
                 <UserIcon size={18} className="text-gray-400 group-hover:text-gray-600 transition-colors" />
                 Profile Settings
               </button>
-              <button className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-100 rounded-xl transition-all font-medium group">
+              <button
+                onClick={() => { setShowProfileSettings(true); setIsDropdownOpen(false); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-100 rounded-xl transition-all font-medium group"
+              >
                 <Settings size={18} className="text-gray-400 group-hover:text-gray-600 transition-colors" />
                 Preferences
               </button>
+              <div className="mt-2 px-4">
+                <p id="theme-label" className="text-[11px] font-semibold uppercase tracking-wider text-fg-subtle mb-1.5">Theme</p>
+                <div role="group" aria-labelledby="theme-label" className="grid grid-cols-3 gap-1 rounded-lg bg-surface-tertiary p-1">
+                  {(['light', 'dark', 'system'] as const).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      aria-pressed={themePref === option}
+                      onClick={() => chooseTheme(option)}
+                      className={`rounded-md py-1.5 text-xs font-semibold capitalize transition-colors ${
+                        themePref === option ? 'bg-surface text-fg shadow-sm' : 'text-fg-muted hover:text-fg'
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
             <div className="h-px bg-gray-200 mx-3"></div>
@@ -211,6 +238,8 @@ export const Header = ({ onMenuClick }: { onMenuClick?: () => void }) => {
           </div>
         )}
       </div>
+
+      {showProfileSettings && <ProfileSettingsModal onClose={() => setShowProfileSettings(false)} />}
 
       <InviteMemberModal
         isOpen={showInviteModal}

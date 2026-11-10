@@ -236,8 +236,8 @@ npm run build
 ### Test Data ✅
 ```
 Users:
-- test@example.com / password123 (Regular user)
-- admin@slack.com / admin123 (Admin user)
+- test@example.com / <SEED_USER_PASSWORD> (Regular user)
+- admin@slack.com / <SEED_ADMIN_PASSWORD> (Admin user)
 
 Channels:
 - general (Protected from deletion)

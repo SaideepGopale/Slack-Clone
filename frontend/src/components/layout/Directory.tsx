@@ -1,160 +1,80 @@
 import axios from 'axios';
-import { AlertCircle, Check, CheckCircle2, Clock, Filter, Grid, Hash, KeyRound, List as ListIcon, Mail, MoreHorizontal, Search, Share2, ShieldAlert, Trash2, UserPlus, Users, X } from 'lucide-react';
+import { Filter, Grid, Hash, List as ListIcon, Search, UserPlus, Users } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useState } from 'react';
-import { toast } from 'react-toastify';
+import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useWorkspace } from '../../pages/workspace/WorkspaceContext';
+import { useWorkspaces } from '../../pages/workspace/WorkspacesProvider';
+import { invitationsApi } from '../../lib/api';
 import { InviteMemberModal } from './InviteMemberModal';
+import { PeopleDirectory } from '../people/PeopleDirectory';
+import { InvitationsPanel } from '../workspaceAdmin/InvitationsPanel';
+import { JoinRequestsPanel } from '../workspaceAdmin/JoinRequestsPanel';
 
-const tabs = ['People', 'Channels', 'User Groups', 'External', 'Invitations', 'Join Requests'];
-
-interface JoinRequest {
-  id: string;
-  status: 'PENDING';
-  createdAt: string;
-  user: { id: string; username: string; email: string };
-}
-
-// 👇 NAYA: OTP Verification Modal Component
-const DeleteOTPModal = ({ isOpen, channelName, onClose, onConfirm }: { isOpen: boolean, channelName: string, onClose: () => void, onConfirm: (otp: string) => void }) => {
-  const [otp, setOtp] = useState('');
-  const [error, setError] = useState('');
-
-  if (!isOpen) return null;
-
-  const handleConfirm = () => {
-    if (otp !== '2121') {
-      setError('Incorrect OTP. Deletion blocked.');
-      return;
-    }
-    setError('');
-    onConfirm(otp);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl border border-red-100"
-      >
-        <div className="p-6 text-center">
-          <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center text-red-500 mx-auto mb-4 border-4 border-red-100">
-            <ShieldAlert size={32} />
-          </div>
-          <h3 className="text-xl font-black text-gray-900 tracking-tight mb-2">Delete #{channelName}?</h3>
-          <p className="text-sm text-gray-500 mb-6 font-medium">This action cannot be undone. Enter admin OTP to authorize deletion.</p>
-
-          <div className="mb-6 relative">
-            <KeyRound size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              autoFocus
-              type="password"
-              maxLength={4}
-              placeholder="Enter 4-digit OTP"
-              value={otp}
-              onChange={(e) => {
-                setOtp(e.target.value);
-                setError('');
-              }}
-              className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-10 pr-4 text-center tracking-[0.5em] font-black outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-500 transition-all text-lg"
-            />
-            {error && <p className="text-red-500 text-xs font-bold mt-2 animate-bounce">{error}</p>}
-          </div>
-
-          <div className="flex gap-3">
-            <button onClick={() => { onClose(); setOtp(''); setError(''); }} className="flex-1 py-3 text-gray-500 font-bold hover:bg-gray-50 rounded-xl transition-all">
-              Cancel
-            </button>
-            <button onClick={handleConfirm} disabled={otp.length !== 4} className="flex-1 py-3 bg-red-500 text-white font-black rounded-xl hover:bg-red-600 transition-all disabled:opacity-50 shadow-lg shadow-red-500/20">
-              Verify & Delete
-            </button>
-          </div>
-        </div>
-      </motion.div>
-    </div>
-  );
-};
+// F1 removed the "User Groups" and "External" tabs (they only ever showed a
+// "nothing here yet" placeholder). Invitations / Join Requests are management
+// tabs, shown only when the server says the viewer may manage invitations.
+const tabs = ['People', 'Channels', 'Invitations', 'Join Requests'];
+const MANAGEMENT_TABS = new Set(['Invitations', 'Join Requests']);
 
 export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: { onChannelJoined?: () => void, onlineUsers?: any[], onSelectUser?: (userId: string) => void }) => {
-  const [activeTab, setActiveTab] = useState('Channels'); // Switched default to Channels for testing
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState(requestedTab && tabs.includes(requestedTab) ? requestedTab : 'Channels');
+  // P3: follow ?tab= when it changes while the directory is already open.
+  useEffect(() => {
+    if (requestedTab && tabs.includes(requestedTab)) setActiveTab(requestedTab);
+  }, [requestedTab]);
   const [search, setSearch] = useState('');
-  const [users, setUsers] = useState<any[]>([]);
   const [channels, setChannels] = useState<any[]>([]);
-  const [invitations, setInvitations] = useState<any[]>([]);
-  const [joinRequests, setJoinRequests] = useState<JoinRequest[]>([]);
-  // 403 (not a workspace admin) is an expected, common case here — not a
-  // real error — so it's tracked separately rather than lumped in with
-  // fetchData's console.error path.
-  const [canManageJoinRequests, setCanManageJoinRequests] = useState(true);
-  const [resolvingRequestId, setResolvingRequestId] = useState<string | null>(null);
+  // F2: pending counts for the management tab badges. The lists themselves
+  // live in the shared, token-free InvitationsPanel / JoinRequestsPanel.
+  const [pendingInvites, setPendingInvites] = useState(0);
+  const [pendingRequests, setPendingRequests] = useState(0);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showFilters, setShowFilters] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
 
-  // 👇 NAYE STATES: Delete logic ke liye
-  const [channelToDelete, setChannelToDelete] = useState<{id: string, name: string} | null>(null);
-
   const { user: currentUser } = useAuth();
   const { workspaceId } = useWorkspace();
-
-  const fetchJoinRequests = () => {
-    axios.get<JoinRequest[]>(`/api/workspaces/${workspaceId}/requests`)
-      .then((res) => {
-        setJoinRequests(res.data);
-        setCanManageJoinRequests(true);
-      })
-      .catch((err) => {
-        if (err.response?.status === 403) {
-          setCanManageJoinRequests(false);
-        } else {
-          console.error('Failed to fetch join requests', err);
-        }
-      });
-  };
+  const canManageInvitations = !!useWorkspaces().getWorkspace(workspaceId)?.capabilities?.canManageInvitations;
+  const visibleTabs = tabs.filter((tab) => !MANAGEMENT_TABS.has(tab) || canManageInvitations);
+  const currentTab = visibleTabs.includes(activeTab) ? activeTab : 'Channels';
 
   const fetchData = async () => {
     try {
       setLoading(true);
-
-      const [usersRes, channelsRes, invitationsRes] = await Promise.all([
-        axios.get('/api/users'),
-        axios.get('/api/channels/all', { params: { workspaceId } }),
-        axios.get('/api/invitations')
-      ]);
-
-      setUsers(Array.isArray(usersRes.data) ? usersRes.data : []);
+      const channelsRes = await axios.get('/api/channels/all', { params: { workspaceId } });
       setChannels(Array.isArray(channelsRes.data) ? channelsRes.data : []);
-      setInvitations(Array.isArray(invitationsRes.data) ? invitationsRes.data : []);
-
     } catch (err) {
       console.error('Failed to fetch directory data', err);
     } finally {
       setLoading(false);
     }
-    // Separate from the Promise.all above on purpose — a 403 here (not a
-    // workspace admin) shouldn't fail the rest of this page's data.
-    fetchJoinRequests();
   };
 
   useEffect(() => {
     fetchData();
   }, [workspaceId]);
 
-  const handleResolveJoinRequest = async (requestId: string, action: 'APPROVE' | 'REJECT') => {
-    setResolvingRequestId(requestId);
-    try {
-      await axios.put(`/api/workspaces/${workspaceId}/requests/${requestId}`, { action });
-      setJoinRequests((prev) => prev.filter((r) => r.id !== requestId));
-      toast.success(action === 'APPROVE' ? 'Request approved — they now have access.' : 'Request rejected.');
-    } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Failed to resolve request.');
-    } finally {
-      setResolvingRequestId(null);
-    }
-  };
+  // Badge counts for managers only (the old GET /api/invitations listing,
+  // which carried tokens, is no longer used anywhere).
+  useEffect(() => {
+    if (!canManageInvitations) return;
+    let cancelled = false;
+    Promise.all([invitationsApi.listWorkspaceInvitations(workspaceId), invitationsApi.listJoinRequests(workspaceId)])
+      .then(([invites, requests]) => {
+        if (cancelled) return;
+        setPendingInvites(invites.filter((inv) => inv.state === 'pending').length);
+        setPendingRequests(requests.length);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId, canManageInvitations]);
 
   // InviteMemberModal owns generating/copying the invite link itself (GET
   // /api/workspaces/:workspaceId/invite-link) — this just refreshes this
@@ -173,27 +93,6 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
     }
   };
 
-  // 👇 NAYA: Execute Delete after OTP success
-  const executeChannelDelete = async (otp: string) => {
-    if (!channelToDelete || otp !== '2121') return;
-    try {
-      await axios.delete(`/api/channels/${channelToDelete.id}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-      });
-      setChannelToDelete(null);
-      await fetchData(); // Refresh list automatically
-      alert('Channel deleted securely.');
-    } catch (err) {
-      alert('You are not authorized or server error occurred.');
-      setChannelToDelete(null);
-    }
-  };
-
-  const filteredUsers = users.filter((u: any) =>
-    u.username.toLowerCase().includes(search.toLowerCase()) ||
-    u.email?.toLowerCase().includes(search.toLowerCase())
-  );
-
   const filteredChannels = channels.filter((c: any) =>
     c.name.toLowerCase().includes(search.toLowerCase())
   );
@@ -201,22 +100,14 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
   return (
     <div className="flex-1 flex flex-col bg-white overflow-hidden h-full selection:bg-slack-purple/10">
       
-      {/* OTP Modal Placement */}
-      <DeleteOTPModal 
-        isOpen={!!channelToDelete} 
-        channelName={channelToDelete?.name || ''} 
-        onClose={() => setChannelToDelete(null)} 
-        onConfirm={executeChannelDelete} 
-      />
-
       {/* Header */}
       <div className="h-[49px] border-b border-gray-200 flex items-center justify-between px-4 md:px-5 shrink-0 bg-white z-20">
         <h1 className="font-black text-base md:text-lg text-gray-900 tracking-tight flex items-center gap-2">
-          {activeTab === 'People' && <Users size={18} className="text-gray-400" />}
-          {activeTab === 'Channels' && <Hash size={18} className="text-gray-400" />}
-          {activeTab}
+          {currentTab === 'People' && <Users size={18} className="text-gray-400" />}
+          {currentTab === 'Channels' && <Hash size={18} className="text-gray-400" />}
+          {currentTab}
         </h1>
-        {activeTab === 'People' && (
+        {currentTab === 'People' && canManageInvitations && (
           <button
             onClick={() => setIsInviteModalOpen(true)}
             className="bg-violet-600 hover:bg-violet-700 text-white font-medium px-4 py-2 rounded-lg shadow-sm flex items-center gap-2 text-sm transition-colors active:scale-95"
@@ -232,21 +123,21 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
         <div className="px-4 md:px-6 border-b border-gray-100 bg-white sticky top-0 z-10">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-6 overflow-x-auto no-scrollbar scroll-smooth">
-              {tabs.map((tab) => (
+              {visibleTabs.map((tab) => (
                 <button
                   key={tab}
                   onClick={() => setActiveTab(tab)}
-                  className={`py-3.5 text-[13px] font-bold border-b-2 transition-all relative whitespace-nowrap ${activeTab === tab
+                  className={`py-3.5 text-[13px] font-bold border-b-2 transition-all relative whitespace-nowrap ${currentTab === tab
                       ? 'border-slack-purple text-gray-900'
                       : 'border-transparent text-gray-500 hover:text-gray-900'
                     }`}
                 >
                   {tab}
-                  {tab === 'Invitations' && invitations.length > 0 && (
-                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-gray-100 text-[10px] text-gray-500 font-black">{invitations.length}</span>
+                  {tab === 'Invitations' && pendingInvites > 0 && (
+                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-gray-100 text-[10px] text-gray-500 font-black">{pendingInvites}</span>
                   )}
-                  {tab === 'Join Requests' && joinRequests.length > 0 && (
-                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-[10px] text-amber-700 font-black">{joinRequests.length}</span>
+                  {tab === 'Join Requests' && pendingRequests > 0 && (
+                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-[10px] text-amber-700 font-black">{pendingRequests}</span>
                   )}
                 </button>
               ))}
@@ -260,7 +151,8 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
         </div>
 
         <div className="p-4 md:p-8 max-w-7xl mx-auto w-full">
-          {/* Invite Banner */}
+          {/* Invite Banner — only for people who can actually invite (F1). */}
+          {canManageInvitations && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -275,23 +167,26 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
                 <p className="text-blue-100/70 text-sm font-medium max-w-md">Collaborate better with your teammates. Invite them to join #{filteredChannels[0]?.name || 'general'}.</p>
               </div>
             </div>
-            <button onClick={() => setIsInviteModalOpen(true)} className="w-full md:w-auto px-6 py-3 bg-white text-[#1264a3] font-black rounded-xl hover:bg-white/90 transition-all active:scale-95 text-[15px] shadow-xl shadow-black/10 shrink-0">
+            <button type="button" onClick={() => setIsInviteModalOpen(true)} className="theme-fixed w-full md:w-auto px-6 py-3 bg-white text-[#1264a3] font-black rounded-xl hover:bg-white/90 transition-colors text-[15px] shadow-xl shadow-black/10 shrink-0">
               Invite people
             </button>
           </motion.div>
+          )}
 
           <InviteMemberModal isOpen={isInviteModalOpen} onClose={closeInviteModal} workspaceId={workspaceId} />
 
-          {/* Search and Filters Bar */}
+          {/* Search and Filters Bar — Channels only (People has its own server-side search; the management tabs have their own controls) */}
+          {currentTab === 'Channels' && (
           <div className="flex flex-col sm:flex-row gap-3 mb-8">
             <div className="flex-1 relative group">
               <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-slack-purple transition-colors" />
-              <input type="text" placeholder={`Filter by name or ${activeTab === 'People' ? 'email' : 'tag'}...`} value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-white border border-gray-200 rounded-xl py-2.5 pl-11 pr-4 text-[13px] font-medium outline-none focus:ring-2 focus:ring-slack-purple/10 focus:border-slack-purple transition-all shadow-sm" />
+              <input type="text" placeholder="Filter channels by name..." aria-label="Filter channels" value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-white border border-gray-200 rounded-xl py-2.5 pl-11 pr-4 text-[13px] font-medium outline-none focus:ring-2 focus:ring-slack-purple/10 focus:border-slack-purple transition-all shadow-sm" />
             </div>
             <button onClick={() => setShowFilters(!showFilters)} className={`px-4 py-2.5 rounded-xl border flex items-center justify-center gap-2 text-[13px] font-bold transition-all ${showFilters ? 'bg-gray-100 border-gray-300 text-gray-900 shadow-inner' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
               <Filter size={16} /> Filter
             </button>
           </div>
+          )}
 
           <AnimatePresence>
             {showFilters && (
@@ -313,56 +208,18 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
           {loading ? (
             <div className="flex flex-col items-center justify-center py-24 gap-4">
               <div className="w-10 h-10 border-4 border-gray-100 border-t-slack-purple rounded-full animate-spin" />
-              <span className="text-gray-400 font-black text-sm uppercase tracking-widest">Scanning {activeTab}...</span>
+              <span className="text-gray-400 font-black text-sm uppercase tracking-widest">Scanning {currentTab}...</span>
             </div>
           ) : (
             <>
-              {activeTab === 'People' && (
-                viewMode === 'grid' ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-5">
-                    {filteredUsers.map((user) => {
-                      const isOnline = onlineUsers.some((ou: any) => ou.id === user.id);
-                      return (
-                        <motion.div key={user.id} initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} whileHover={{ y: -4 }} className="bg-white border border-gray-200 rounded-2xl p-5 hover:border-slack-purple/30 hover:shadow-[0_12px_24px_-8px_rgba(0,0,0,0.08)] transition-all group flex flex-col items-center text-center relative">
-                          <div className="relative mb-4">
-                            <div className="w-20 h-20 rounded-[1.8rem] bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center font-black text-gray-500 text-2xl border-2 border-white shadow-sm ring-1 ring-gray-100 group-hover:scale-105 transition-transform">
-                              {user.username.substring(0, 1).toUpperCase()}
-                            </div>
-                            {isOnline && <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-white rounded-full flex items-center justify-center shadow-md"><div className="w-4 h-4 bg-slack-green rounded-full border-2 border-white" /></div>}
-                          </div>
-                          <div className="mb-4">
-                            <h4 className="font-black text-gray-900 tracking-tight truncate max-w-full text-base">{user.username} {user.id === currentUser?.id && '(You)'}</h4>
-                            <p className="text-[11px] text-gray-400 font-bold uppercase tracking-tight">Active User</p>
-                          </div>
-                          <div className="flex items-center gap-2 w-full pt-4 border-t border-gray-50 mt-auto">
-                            <button onClick={() => onSelectUser?.(user.id)} className="flex-1 py-2 bg-gray-50 hover:bg-gray-100 rounded-lg text-gray-600 text-[11px] font-black transition-all hover:text-gray-900 active:scale-95">Message</button>
-                            <button className="p-2 hover:bg-gray-100 rounded-lg text-gray-400 transition-colors"><MoreHorizontal size={16} /></button>
-                          </div>
-                        </motion.div>
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="flex flex-col border border-gray-100 rounded-xl overflow-hidden bg-white shadow-sm">
-                    {filteredUsers.map((user, idx) => (
-                      <div key={user.id} onClick={() => onSelectUser?.(user.id)} className={`flex items-center justify-between p-4 px-6 hover:bg-gray-50 transition-colors group cursor-pointer ${idx !== filteredUsers.length - 1 ? 'border-b border-gray-50' : ''}`}>
-                        <div className="flex items-center gap-4">
-                          <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center font-black text-gray-500 text-sm">{user.username.substring(0, 2).toUpperCase()}</div>
-                          <div className="flex flex-col"><span className="font-bold text-gray-900">{user.username}</span><span className="text-xs text-gray-400">Software Engineer</span></div>
-                        </div>
-                        <button className="p-2 text-gray-400 hover:text-slack-purple transition-colors opacity-0 group-hover:opacity-100"><Mail size={18} /></button>
-                      </div>
-                    ))}
-                  </div>
-                )
+              {currentTab === 'People' && currentUser && (
+                <PeopleDirectory workspaceId={workspaceId} currentUserId={currentUser.id} onMessage={(id) => onSelectUser?.(id)} />
               )}
 
               {/* 👇 UPGRADED: Channels Tab with Delete Button */}
-              {activeTab === 'Channels' && (
+              {currentTab === 'Channels' && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {filteredChannels.map((channel) => {
-                    const isGeneral = channel.name.toLowerCase() === 'general';
-                    
                     return (
                       <motion.div
                         key={channel.id}
@@ -376,30 +233,27 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
                           <div className="flex flex-col min-w-0">
                             <span className="font-black text-gray-900 tracking-tight group-hover:text-slack-purple transition-colors">#{channel.name}</span>
                             <div className="flex items-center gap-2 mt-0.5">
-                              <span className="text-[10px] bg-gray-100 text-gray-500 font-black px-1.5 py-0.5 rounded tracking-tighter uppercase">Public</span>
+                              <span className="text-[10px] bg-gray-100 text-gray-500 font-black px-1.5 py-0.5 rounded tracking-tighter uppercase">
+                                {channel.isAnnouncement ? 'Announcement' : channel.visibility === 'PRIVATE' ? 'Private' : 'Public'}
+                              </span>
                               <span className="text-[10px] text-gray-400 font-bold">Workspace Project</span>
                             </div>
                           </div>
                         </div>
 
                         <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleJoinChannel(channel.id)}
-                            className="px-5 py-2 bg-white border border-gray-300 text-gray-700 font-black rounded-lg hover:border-slack-purple hover:text-slack-purple hover:bg-slack-purple/5 transition-all text-[11px] uppercase tracking-wider"
-                          >
-                            Join
-                          </button>
-                          
-                          {/* Trash Button - Hidden for general channel */}
-                          {!isGeneral && (
+                          {/* Batch 3/D: private channels are joined by invitation only. */}
+                          {channel.isMember ? (
+                            <span className="px-3 py-2 text-[11px] font-black text-gray-400 uppercase tracking-wider">Joined</span>
+                          ) : channel.visibility !== 'PRIVATE' ? (
                             <button
-                              onClick={() => setChannelToDelete({ id: channel.id, name: channel.name })}
-                              className="p-2 bg-white border border-gray-200 text-gray-400 font-black rounded-lg hover:border-red-500 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100"
-                              title="Delete Channel"
+                              onClick={() => handleJoinChannel(channel.id)}
+                              className="px-5 py-2 bg-white border border-gray-300 text-gray-700 font-black rounded-lg hover:border-slack-purple hover:text-slack-purple hover:bg-slack-purple/5 transition-all text-[11px] uppercase tracking-wider"
                             >
-                              <Trash2 size={16} />
+                              Join
                             </button>
-                          )}
+                          ) : null}
+                          
                         </div>
                       </motion.div>
                     );
@@ -407,104 +261,16 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
                 </div>
               )}
 
-              {activeTab === 'Invitations' && (
-                <div className="flex flex-col gap-4">
-                  {invitations.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-20 text-center">
-                      <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-6 text-gray-300"><Mail size={40} /></div>
-                      <h3 className="text-xl font-black text-gray-900 mb-2">No pending invitations</h3>
-                      <p className="text-gray-500 max-w-sm">When you invite teammates by email, they will appear here until they join.</p>
-                      <button onClick={() => setIsInviteModalOpen(true)} className="mt-6 px-6 py-2 bg-slack-purple text-white font-black rounded-lg transition-all active:scale-95 shadow-lg shadow-purple-900/10">Invite Someone</button>
-                    </div>
-                  ) : (
-                    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden mt-2 w-full">
-                      <div className="grid grid-cols-12 gap-4 p-4 border-b border-gray-100 bg-gray-50/80 text-[11px] font-black text-gray-500 uppercase tracking-widest">
-                        <div className="col-span-5 md:col-span-6">Invited Email</div><div className="col-span-3 md:col-span-2">Status</div><div className="col-span-3 md:col-span-3 hidden sm:block">Invited On</div><div className="col-span-4 sm:col-span-1 text-right">Action</div>
-                      </div>
-                      <div className="divide-y divide-gray-100 bg-white">
-                        {invitations.map((inv) => (
-                          <div key={inv.id} className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-gray-50/50 transition-colors group">
-                            <div className="col-span-5 md:col-span-6 flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100"><Mail size={14} /></div><span className="font-semibold text-gray-800 text-[13px] md:text-sm truncate">{inv.email}</span></div>
-                            <div className="col-span-3 md:col-span-2 flex items-center">{inv.status === 'pending' ? <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] md:text-[11px] font-black bg-amber-50 text-amber-600 border border-amber-200"><Clock size={12} strokeWidth={3} /> PENDING</span> : <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] md:text-[11px] font-black bg-green-50 text-green-600 border border-green-200"><CheckCircle2 size={12} strokeWidth={3} /> ACCEPTED</span>}</div>
-                            <div className="col-span-3 md:col-span-3 hidden sm:block text-[13px] text-gray-500 font-medium">{inv.createdAt ? new Date(inv.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Recently'}</div>
-                            <div className="col-span-4 sm:col-span-1 flex justify-end"><button onClick={() => { const joinLink = `${window.location.origin}/invite/${inv.token}`; navigator.clipboard.writeText(joinLink); toast.success('Invite link copied to clipboard!'); }} className="p-2 text-gray-400 hover:text-slack-purple hover:bg-slack-purple/10 rounded-lg transition-all opacity-100 sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100" title="Copy Invite Link"><Share2 size={16} /></button></div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
+              {/* F2: shared, token-free management panels (also used in workspace settings). */}
+              {currentTab === 'Invitations' && canManageInvitations && (
+                <InvitationsPanel workspaceId={workspaceId} onPendingCountChange={setPendingInvites} />
               )}
 
-              {activeTab === 'Join Requests' && (
-                <div className="flex flex-col gap-4">
-                  {!canManageJoinRequests ? (
-                    <div className="flex flex-col items-center justify-center py-20 text-center">
-                      <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-6 text-gray-300"><ShieldAlert size={40} /></div>
-                      <h3 className="text-xl font-black text-gray-900 mb-2">Admins only</h3>
-                      <p className="text-gray-500 max-w-sm">Only a workspace admin can view and resolve join requests.</p>
-                    </div>
-                  ) : joinRequests.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-20 text-center">
-                      <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-6 text-gray-300"><Clock size={40} /></div>
-                      <h3 className="text-xl font-black text-gray-900 mb-2">No pending join requests</h3>
-                      <p className="text-gray-500 max-w-sm">When someone uses your invite link, their request to join will appear here for approval.</p>
-                    </div>
-                  ) : (
-                    <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden mt-2 w-full">
-                      <div className="grid grid-cols-12 gap-4 p-4 border-b border-gray-100 bg-gray-50/80 text-[11px] font-black text-gray-500 uppercase tracking-widest">
-                        <div className="col-span-6 md:col-span-5">Person</div>
-                        <div className="col-span-3 hidden sm:block">Requested On</div>
-                        <div className="col-span-6 sm:col-span-4 text-right">Action</div>
-                      </div>
-                      <div className="divide-y divide-gray-100 bg-white">
-                        {joinRequests.map((req) => (
-                          <div key={req.id} className="grid grid-cols-12 gap-4 p-4 items-center hover:bg-gray-50/50 transition-colors">
-                            <div className="col-span-6 md:col-span-5 flex items-center gap-3 min-w-0">
-                              <div className="w-8 h-8 rounded-full bg-violet-50 text-violet-600 flex items-center justify-center shrink-0 border border-violet-100 font-black text-xs">
-                                {req.user.username.substring(0, 1).toUpperCase()}
-                              </div>
-                              <div className="min-w-0">
-                                <div className="font-semibold text-gray-800 text-[13px] md:text-sm truncate">{req.user.username}</div>
-                                <div className="text-xs text-gray-400 truncate">{req.user.email}</div>
-                              </div>
-                            </div>
-                            <div className="col-span-3 hidden sm:block text-[13px] text-gray-500 font-medium">
-                              {new Date(req.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                            </div>
-                            <div className="col-span-6 sm:col-span-4 flex justify-end gap-2">
-                              <button
-                                onClick={() => handleResolveJoinRequest(req.id, 'REJECT')}
-                                disabled={resolvingRequestId === req.id}
-                                className="px-3 py-1.5 border border-gray-200 text-gray-600 font-bold rounded-lg hover:border-red-300 hover:text-red-600 hover:bg-red-50 transition-all text-[11px] flex items-center gap-1.5 disabled:opacity-50"
-                              >
-                                <X size={13} /> Reject
-                              </button>
-                              <button
-                                onClick={() => handleResolveJoinRequest(req.id, 'APPROVE')}
-                                disabled={resolvingRequestId === req.id}
-                                className="px-3 py-1.5 bg-slack-purple text-white font-bold rounded-lg hover:bg-purple-800 transition-all text-[11px] flex items-center gap-1.5 disabled:opacity-50"
-                              >
-                                <Check size={13} /> Approve
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
+              {currentTab === 'Join Requests' && canManageInvitations && (
+                <JoinRequestsPanel workspaceId={workspaceId} onCountChange={setPendingRequests} />
               )}
 
-              {['User Groups', 'External'].includes(activeTab) && (
-                <div className="flex flex-col items-center justify-center py-24 text-center">
-                  <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mb-6 text-gray-300"><AlertCircle size={40} /></div>
-                  <h3 className="text-xl font-black text-gray-900 mb-2">Nothing to see here yet</h3>
-                  <p className="text-gray-500 max-w-sm font-medium">We're still workspace setup mode. This section will be populated once you grow your team.</p>
-                </div>
-              )}
-
-              {((activeTab === 'People' && filteredUsers.length === 0) || (activeTab === 'Channels' && filteredChannels.length === 0)) && (
+              {currentTab === 'Channels' && filteredChannels.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-20 bg-gray-50/50 rounded-2xl border-2 border-dashed border-gray-200">
                   <Search size={32} className="text-gray-300 mb-4" />
                   <p className="text-gray-400 font-black text-sm uppercase tracking-widest">No results found for "{search}"</p>

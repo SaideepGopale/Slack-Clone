@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { ActivityView } from '../../components/layout/ActivityView';
-import { Channel } from '../../types';
+import { requestMessageFocusAfterNavigation } from '../../lib/messageFocus';
 import { useWorkspace } from './WorkspaceContext';
 
 export const ActivityPage = () => {
@@ -9,8 +9,10 @@ export const ActivityPage = () => {
 
   return (
     <ActivityView
-      onSelectChannel={(ch: Channel) => navigate(`/${workspaceId}/c/${ch.id}`)}
-      onViewChange={(view: string) => { if (view !== 'chat') navigate(`/${workspaceId}/${view}`); }}
+      onOpen={(target) => {
+        requestMessageFocusAfterNavigation(target);
+        navigate(`/${workspaceId}/c/${target.channelId}`);
+      }}
     />
   );
 };
