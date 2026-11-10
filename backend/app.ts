@@ -1,6 +1,6 @@
 import cors from 'cors';
 import express from 'express';
-import { APP_URL, NODE_ENV } from './config/env';
+import { ALLOWED_ORIGINS, TRUST_PROXY } from './config/env';
 import { prisma } from './lib/prisma';
 import { errorHandler } from './middleware/error.middleware';
 import { revokeSocketsOnUserDeletion } from './middleware/socketRevocation.middleware';
@@ -24,9 +24,12 @@ import { uploadDir } from './modules/uploads/storage.service';
 import usersRoutes from './modules/users/users.routes';
 import workspacesRoutes from './modules/workspaces/workspaces.routes';
 
-const allowedOrigins = [APP_URL, 'http://localhost:5173'];
-
 export const app = express();
+
+// Render terminates TLS at its load balancer and forwards requests, so req.ip
+// (used by every rate limiter) must come from X-Forwarded-For — exactly one
+// trusted hop in production, none locally (config/deployment.ts).
+app.set('trust proxy', TRUST_PROXY);
 
 // P3 (FA-SEC-10, code part): don't advertise the framework, and send baseline
 // hardening headers on every response (the API only ever returns JSON/files).
@@ -38,14 +41,15 @@ app.use((_req, res, next) => {
   next();
 });
 
+// Browser origins allowed to call the API: APP_URL (the frontend), plus the
+// local dev origins outside production (config/deployment.ts). Requests without
+// an Origin header (server-to-server, health checks, curl) are unaffected.
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else if (NODE_ENV !== 'production') {
+    if (!origin || ALLOWED_ORIGINS.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'));
+      callback(Object.assign(new Error('Not allowed by CORS'), { status: 403 }));
     }
   },
   credentials: true,

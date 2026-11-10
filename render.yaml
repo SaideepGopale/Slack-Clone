@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: slack-clone-backend
+    name: smartconnect-backend
     runtime: node
     rootDir: backend
     plan: free
@@ -9,6 +9,7 @@ services:
     # `npm ci` skip devDependencies — and typescript, @types/*, vitest, and
     # supertest all live there. Without this flag `tsc` can't find type
     # declarations for express/multer/jsonwebtoken/etc. and the build fails.
+    # (tsx, used by startCommand, is a devDependency too.)
     buildCommand: npm ci --include=dev && npm run build
     # `npm start` (node dist/server.js) fails at runtime: this backend uses
     # native ESM ("type": "module") with extensionless relative imports
@@ -18,27 +19,36 @@ services:
     # above still runs as a type-check gate, but running the TS source
     # directly via tsx (same as the dev script) sidesteps the compiled
     # output's extension problem entirely.
+    # Note: `db:deploy` (prisma migrate deploy) applies any pending migrations
+    # on every start, and a failing migration stops the new version from
+    # starting. Check the data a new migration depends on before deploying it
+    # (e.g. no case-insensitive duplicate e-mails before
+    # 20261111100000_user_email_case_insensitive_unique).
     startCommand: npm run db:deploy && npx tsx server.ts
     healthCheckPath: /api/health
     envVars:
+      - key: NODE_VERSION
+        value: 22.14.0
       - key: NODE_ENV
         value: production
       # Database is Supabase, not Render's managed Postgres — no
       # `databases:` block/fromDatabase here. Paste the Supabase connection
-      # string (Session pooler, not the direct/IPv6-only one — see deploy
-      # notes) into this var via the Render dashboard after the blueprint
-      # creates the service.
+      # string (Session pooler, not the direct/IPv6-only one, and never the
+      # transaction pooler — migrations need a session) into this var via the
+      # Render dashboard after the blueprint creates the service.
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET
         generateValue: true
-      # Must equal the frontend service's real URL for CORS to allow it
-      # (see the allowedOrigins check in app.ts). The "slack-clone-frontend"
-      # name was already taken on Render, so it got suffixed to this actual
-      # deployed URL — update this again if the service is ever recreated
-      # under a different name/suffix.
+      # The frontend static site's public URL, e.g.
+      # https://smartconnect-frontend.onrender.com (Render may add a suffix if
+      # the name is taken — copy the exact URL from the frontend service; no
+      # trailing slash needed). It is the only browser origin CORS and
+      # Socket.IO accept in production, and the base of invitation,
+      # activation and password-reset links. The backend refuses to start in
+      # production without it.
       - key: APP_URL
-        value: https://slack-clone-frontend-gpvf.onrender.com
+        sync: false
       # Secrets — not safe to commit. Fill these in via the Render dashboard
       # after the blueprint creates the service.
       - key: CLOUDINARY_CLOUD_NAME
@@ -52,9 +62,17 @@ services:
       # HTTP API instead. Paste the API key from resend.com/api-keys here.
       - key: RESEND_API_KEY
         sync: false
+      # Optional sender, e.g. "SmartConnect <no-reply@your-verified-domain>" —
+      # the domain must be verified in Resend. Leave blank to use Resend's
+      # shared test sender (delivers only to the Resend account owner).
+      - key: EMAIL_FROM
+        sync: false
+      # Express trusts exactly one proxy hop in production (Render's load
+      # balancer), so rate limits see each client's own IP. Override only if
+      # needed with TRUST_PROXY (a hop count, true/false or an Express value).
 
   - type: web
-    name: slack-clone-frontend
+    name: smartconnect-frontend
     runtime: static
     rootDir: frontend
     buildCommand: npm ci && npm run build
@@ -66,9 +84,13 @@ services:
         source: /*
         destination: /index.html
     envVars:
-      # "slack-clone-backend" was already taken on Render too, so the actual
-      # deployed backend is at this suffixed URL — same caveat as APP_URL.
+      - key: NODE_VERSION
+        value: 22.14.0
+      # The backend web service's public URL, e.g.
+      # https://smartconnect-backend.onrender.com (copy the exact URL from the
+      # backend service; no `/api` suffix). Vite bakes both into the bundle
+      # at build time, so redeploy the frontend after changing them.
       - key: VITE_API_URL
-        value: https://slack-clone-backend-w8qp.onrender.com
+        sync: false
       - key: VITE_BACKEND_URL
-        value: https://slack-clone-backend-w8qp.onrender.com
+        sync: false

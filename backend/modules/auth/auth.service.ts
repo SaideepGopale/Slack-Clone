@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { Prisma, Role } from '@prisma/client';
-import { JWT_SECRET } from '../../config/env';
+import { APP_URL, JWT_SECRET } from '../../config/env';
 import { isValidEmail } from '../../lib/email';
 import { prisma } from '../../lib/prisma';
 import { generateOtp, hashOtp, MAX_OTP_ATTEMPTS, OTP_TTL_MS, verifyOtp as verifyOtpCode } from '../../lib/otp';
@@ -287,7 +287,8 @@ export const getMe = async (userId: string) => {
 export const issuePasswordReset = async (user: { id: string; email: string; password: string }) => {
   const secret = JWT_SECRET + user.password;
   const resetToken = jwt.sign({ id: user.id }, secret, { expiresIn: '15m' });
-  const resetLink = `http://localhost:5174/reset-password?token=${resetToken}&id=${user.id}`;
+  // The frontend's /reset-password page, at the configured frontend origin (APP_URL).
+  const resetLink = `${APP_URL}/reset-password?token=${resetToken}&id=${user.id}`;
   await sendResetPasswordEmail(user.email, resetLink);
 };
 
