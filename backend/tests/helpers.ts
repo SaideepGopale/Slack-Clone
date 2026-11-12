@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import bcrypt from 'bcryptjs';
 import request from 'supertest';
-import { Role } from '@prisma/client';
+import { AccountTier, Role } from '@prisma/client';
 import { app } from '../app';
 import { prisma } from '../lib/prisma';
 
@@ -40,3 +40,17 @@ export const createAndLoginUser = async (overrides: { role?: Role } = {}) => {
 };
 
 export const authHeader = (token: string) => ({ Authorization: `Bearer ${token}` });
+
+/**
+ * Stage 1: sets an account's company tier directly in the database — what the
+ * reviewed backfill or a Company Admin grant will do. No row = MEMBER.
+ */
+export const grantTier = (userId: string, tier: AccountTier = 'TEAM_LEAD') =>
+  prisma.accountTierGrant.upsert({ where: { userId }, update: { tier }, create: { userId, tier } });
+
+/** A logged-in Team Lead (an ordinary USER account holding the TEAM_LEAD tier). */
+export const createTeamLead = async () => {
+  const lead = await createAndLoginUser();
+  await grantTier(lead.user.id, 'TEAM_LEAD');
+  return lead;
+};

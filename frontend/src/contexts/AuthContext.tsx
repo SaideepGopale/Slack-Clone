@@ -1,10 +1,14 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
+import { applyTabSessionUrl, clearStoredToken, readStoredToken, writeStoredToken } from '../lib/devTabSession';
 import { User } from '../types';
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
+
+  /** P2: keeps the in-session copy of User.lastActiveWorkspaceId current ("/" lands there). */
+  setLastActiveWorkspace?: (workspaceId: string) => void;
 
   login: (
     email: string,
@@ -13,10 +17,13 @@ interface AuthContextType {
 
   // Direct, single-step signup — active path right now (no email/OTP
   // round-trip). Creates the account and hydrates the session immediately.
+  // T.21: sign-up is invitation-only — inviteToken is the e-mail invitation
+  // (verified by the server) that this address was invited with.
   signup: (
     username: string,
     email: string,
-    password: string
+    password: string,
+    inviteToken?: string
   ) => Promise<void>;
 
   // Step 1 of sign-up: requests an email OTP. No session exists yet — the
@@ -47,8 +54,16 @@ interface AuthContextType {
     user: User
   ) => void;
 
+  /** Signs out: ends the server-side session (T.32), then clears this tab. */
   logout: () => void;
   loading: boolean;
+  /**
+   * T.32 (audit M17): set when the session could not be checked for a reason
+   * other than "the session is over" (network error, server 5xx, rate limit).
+   * The token is kept — the user is not signed out by a transient failure.
+   */
+  sessionError: string | null;
+  retrySession: () => void;
 }
 
 const AuthContext = createContext<
@@ -63,14 +78,10 @@ export const AuthProvider: React.FC<{
 
   const [token, setToken] =
     useState<string | null>(() => {
-      const t =
-        localStorage.getItem('token');
-
-      const validToken =
-        t === 'null' ||
-        t === 'undefined'
-          ? null
-          : t;
+      // T.37: the shared localStorage token, or — for an isolated local
+      // development tab (?tabSession=1) — this tab's own one.
+      applyTabSessionUrl();
+      const validToken = readStoredToken();
 
       if (validToken) {
         axios.defaults.headers.common[
@@ -84,23 +95,54 @@ export const AuthProvider: React.FC<{
   const [loading, setLoading] =
     useState(true);
 
+  const [sessionError, setSessionError] =
+    useState<string | null>(null);
+  const [sessionAttempt, setSessionAttempt] =
+    useState(0);
+
   // Allows logout inside effects
   const logoutRef = useRef<
     () => void
   >(() => {});
 
-  const logout = useCallback(() => {
-    localStorage.removeItem('token');
+  // Local sign-out only: the server already considers the session over
+  // (a 401), or logout() below has asked it to end the session.
+  const clearSession = useCallback(() => {
+    clearStoredToken();
+    // Older builds kept a copy of the user object here; nothing reads it.
     localStorage.removeItem('user');
 
     delete axios.defaults.headers
       .common['Authorization'];
 
+    setSessionError(null);
     setToken(null);
     setUser(null);
   }, []);
 
-  logoutRef.current = logout;
+  // T.32 (audit H1): logging out ends the server-side session, so the token
+  // stops working everywhere it may have been copied. Local sign-out never
+  // waits for the network.
+  const logout = useCallback(() => {
+    const current = readStoredToken();
+    if (current) {
+      void axios
+        .post('/api/auth/logout', null, { headers: { Authorization: `Bearer ${current}` } })
+        .catch(() => undefined);
+    }
+    clearSession();
+  }, [clearSession]);
+
+  logoutRef.current = clearSession;
+
+  // A stale copy of the user object from older builds (never read).
+  useEffect(() => {
+    try {
+      localStorage.removeItem('user');
+    } catch {
+      // storage unavailable
+    }
+  }, []);
 
   useEffect(() => {
     if (token) {
@@ -114,32 +156,51 @@ export const AuthProvider: React.FC<{
   }, [token]);
 
   useEffect(() => {
+    let cancelled = false;
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
     const checkAuth = async () => {
-      if (token) {
-        try {
-          const res =
-            await axios.get<User>(
-              '/api/auth/me'
-            );
-
-          setUser(res.data);
-
-          localStorage.setItem(
-            'user',
-            JSON.stringify(res.data)
-          );
-        } catch {
-          logoutRef.current();
-        }
-      } else {
+      if (!token) {
         setUser(null);
+        setLoading(false);
+        return;
       }
-
+      setSessionError(null);
+      // T.32 (audit M17): only a 401 means the session is over. Anything else
+      // (offline, a cold-starting server, 5xx, 429) is retried briefly and
+      // then shown as a recoverable error — never a silent sign-out.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const res = await axios.get<User>('/api/auth/me');
+          if (cancelled) return;
+          setUser(res.data);
+          setLoading(false);
+          return;
+        } catch (err) {
+          if (cancelled) return;
+          if (axios.isAxiosError(err) && err.response?.status === 401) {
+            logoutRef.current();
+            setLoading(false);
+            return;
+          }
+          if (attempt < 2) await wait(800 * 2 ** attempt);
+        }
+      }
+      if (cancelled) return;
+      setSessionError('We could not reach SmartConnect. Check your connection and try again.');
       setLoading(false);
     };
 
     checkAuth();
-  }, [token]);
+    return () => {
+      cancelled = true;
+    };
+  }, [token, sessionAttempt]);
+
+  const retrySession = useCallback(() => {
+    setLoading(true);
+    setSessionAttempt((n) => n + 1);
+  }, []);
 
   useEffect(() => {
     const interceptor =
@@ -180,15 +241,7 @@ export const AuthProvider: React.FC<{
       user: newUser,
     } = res.data;
 
-    localStorage.setItem(
-      'token',
-      newToken
-    );
-
-    localStorage.setItem(
-      'user',
-      JSON.stringify(newUser)
-    );
+    writeStoredToken(newToken);
 
     axios.defaults.headers.common[
       'Authorization'
@@ -201,7 +254,8 @@ export const AuthProvider: React.FC<{
   const signup = async (
     username: string,
     email: string,
-    password: string
+    password: string,
+    inviteToken?: string
   ) => {
     const res = await axios.post<{
       token: string;
@@ -210,6 +264,7 @@ export const AuthProvider: React.FC<{
       username,
       email,
       password,
+      ...(inviteToken ? { inviteToken } : {}),
     });
 
     hydrateSession(res.data.token, res.data.user);
@@ -260,8 +315,7 @@ export const AuthProvider: React.FC<{
     newToken: string,
     newUser: User
   ) => {
-    localStorage.setItem('token', newToken);
-    localStorage.setItem('user', JSON.stringify(newUser));
+    writeStoredToken(newToken);
 
     axios.defaults.headers.common[
       'Authorization'
@@ -270,6 +324,13 @@ export const AuthProvider: React.FC<{
     setToken(newToken);
     setUser(newUser);
   };
+
+  const setLastActiveWorkspace = useCallback((workspaceId: string) => {
+    setUser((prev) => {
+      if (!prev || prev.lastActiveWorkspaceId === workspaceId) return prev;
+      return { ...prev, lastActiveWorkspaceId: workspaceId };
+    });
+  }, []);
 
   return (
     <AuthContext.Provider
@@ -284,6 +345,9 @@ export const AuthProvider: React.FC<{
         hydrateSession,
         logout,
         loading,
+        sessionError,
+        retrySession,
+        setLastActiveWorkspace,
       }}
     >
       {children}

@@ -19,15 +19,36 @@
  * Creating it lowercase would silently break auto-join for every signup
  * after running this script.
  *
- * Usage:  npx tsx reset.ts
+ * Usage (local / QA databases only; nothing has a default):
+ *   RESET_CONFIRM=DELETE_ALL_DATA RESET_ADMIN_PASSWORD='<new admin password>' npx tsx reset.ts
+ *   Optional: RESET_ADMIN_EMAIL (defaults to system.admin@slick.internal).
+ *
+ * Stage 1B (T.30): the system admin password is no longer hard-coded or
+ * printed. The script refuses to run — before touching the database — when
+ * NODE_ENV=production, when RESET_CONFIRM is not exactly DELETE_ALL_DATA, or
+ * when RESET_ADMIN_PASSWORD is missing or shorter than 12 characters.
  */
 import bcrypt from 'bcryptjs';
 import { prisma } from './lib/prisma';
 import { DEFAULT_WORKSPACE_SLUG } from './modules/workspaces/workspaces.service';
 
-const SYSTEM_ADMIN_EMAIL = 'system.admin@slick.internal';
+const refuse = (reason: string): never => {
+  console.error(`Refusing to reset the database: ${reason}`);
+  process.exit(1);
+};
+if (process.env.NODE_ENV === 'production') {
+  refuse('this script deletes every row and is for local or QA databases only (NODE_ENV=production).');
+}
+if (process.env.RESET_CONFIRM !== 'DELETE_ALL_DATA') {
+  refuse('set RESET_CONFIRM=DELETE_ALL_DATA to confirm that every row of the database at DATABASE_URL will be deleted.');
+}
+const ADMIN_PASSWORD_MIN = 12;
+const SYSTEM_ADMIN_PASSWORD = process.env.RESET_ADMIN_PASSWORD ?? '';
+if (SYSTEM_ADMIN_PASSWORD.length < ADMIN_PASSWORD_MIN) {
+  refuse(`set RESET_ADMIN_PASSWORD to the new system admin password (at least ${ADMIN_PASSWORD_MIN} characters). It is never printed.`);
+}
+const SYSTEM_ADMIN_EMAIL = process.env.RESET_ADMIN_EMAIL?.trim() || 'system.admin@slick.internal';
 const SYSTEM_ADMIN_USERNAME = 'System Admin';
-const SYSTEM_ADMIN_PASSWORD = 'SystemAdmin123!';
 const DEFAULT_WORKSPACE_NAME = 'Default Workspace';
 
 async function purge() {
@@ -135,7 +156,7 @@ async function seedFoundation() {
   });
 
   console.log('--- FOUNDATION CREATED ---');
-  console.log(`  Login:        ${admin.email} / ${SYSTEM_ADMIN_PASSWORD}`);
+  console.log(`  Login:        ${admin.email} (password: the RESET_ADMIN_PASSWORD you supplied; not printed)`);
   console.log(`  Workspace:    ${workspace.name} (${workspace.id})`);
   console.log(`  Channel:      #${generalChannel.name} (${generalChannel.id})\n`);
 }

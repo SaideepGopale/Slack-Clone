@@ -13,14 +13,16 @@ import { defineConfig } from 'vite';
         },
       },
       server: {
-        port: 5173,
+        // Local dev (P0): the frontend origin must match backend APP_URL
+        // (http://localhost:5174). strictPort makes Vite fail loudly instead
+        // of silently moving to another port and breaking that match.
+        port: 5174,
+        strictPort: true,
         proxy: {
+          // Backend dev server: PORT=3000 (backend/.env; default in
+          // backend/config/env.ts). Used when VITE_API_URL is unset.
           '/api': {
-            target: 'http://localhost:4000',
-            changeOrigin: true,
-          },
-          '/uploads': {
-            target: 'http://localhost:4000',
+            target: 'http://localhost:3000',
             changeOrigin: true,
           },
           

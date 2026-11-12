@@ -4,12 +4,13 @@ import { Channel } from '../../types';
 import { useWorkspace } from './WorkspaceContext';
 
 export const HomePage = () => {
-  const { workspaceId, channels } = useWorkspace();
+  const { workspaceId, channels, dms } = useWorkspace();
   const navigate = useNavigate();
 
   return (
     <HomeView
       channels={channels}
+      dms={dms}
       onSelectChannel={(ch: Channel) => navigate(`/${workspaceId}/c/${ch.id}`)}
       onViewChange={(view: string) => navigate(`/${workspaceId}/${view}`)}
     />

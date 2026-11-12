@@ -10,6 +10,28 @@ export const setSocketServer = (server: Server) => {
   io = server;
 };
 
+export const getSocketServer = (): Server | null => io;
+
+// Room joined by every socket of every member of a workspace (presence.handlers
+// joins it at connect; addWorkspacePresence/removeWorkspacePresence maintain it).
+export const workspaceRoom = (workspaceId: string) => `ws:${workspaceId}`;
+
+/** Emits to every connected member of a workspace (all their tabs/devices). */
+export const emitToWorkspace = (workspaceId: string, event: string, payload: unknown) => {
+  io?.to(workspaceRoom(workspaceId)).emit(event, payload);
+};
+
+/** Emits once per socket to the union of several workspace rooms and user rooms. */
+export const emitToRooms = (workspaceIds: string[], userIds: string[], event: string, payload: unknown) => {
+  const rooms = [...workspaceIds.map(workspaceRoom), ...userIds.map((id) => `user:${id}`)];
+  if (rooms.length > 0) io?.to(rooms).emit(event, payload);
+};
+
+/** Emits an event to every live socket (tab/device) of one user. */
+export const notifyUser = (userId: string, event: string, payload: unknown) => {
+  io?.to(`user:${userId}`).emit(event, payload);
+};
+
 // Forcibly disconnects every active socket session for a user — used both
 // when an admin bans/suspends someone via REST (real-time enforcement, not
 // "wait for their token to expire or next reconnect") and by the explicit
@@ -38,6 +60,20 @@ export const broadcastMessageDeleted = (channelId: string, messageId: string) =>
 // their sidebar instantly with no refetch.
 export const notifyChannelMemberAdded = (targetUserId: string, channel: unknown) => {
   io?.to(`user:${targetUserId}`).emit('channel:member_added', channel);
+};
+
+// Subscribes every live socket of a user (all tabs/devices) to a channel room
+// the moment they gain access via REST — joining, being added, creating a
+// channel or DM, or being approved into a workspace — so they receive its
+// messages immediately, without waiting for a reconnect.
+export const subscribeUserToChannel = (userId: string, channelId: string) => {
+  io?.in(`user:${userId}`).socketsJoin(channelId);
+};
+
+// A DM was created by someone else — lets the recipient's sidebar show the
+// conversation right away. The payload is already display-named for them.
+export const notifyDMCreated = (targetUserId: string, dm: unknown) => {
+  io?.to(`user:${targetUserId}`).emit('dm:created', dm);
 };
 
 // Lets the REST reactions endpoint (messages.controller.ts) broadcast the

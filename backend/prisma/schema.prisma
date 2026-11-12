@@ -23,6 +23,70 @@ enum WorkspaceRole {
   MEMBER
 }
 
+// Batch 3 — organization roles. Separate from WorkspaceRole (tenant level)
+// and from the platform-wide User.role (frozen admin authentication).
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+// Who may create channels in a workspace (workspace setting).
+enum ChannelCreationPolicy {
+  MEMBERS
+  ADMINS
+}
+
+// Batch 3/D. Channel types are two orthogonal settings: visibility
+// (PUBLIC = discoverable by workspace members, PRIVATE = members only) and
+// Channel.isAnnouncement (only owners/moderators/workspace admins post
+// top-level messages). Ignored for DMs/group DMs (always membership-only).
+enum ChannelVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+// Batch 3/C. PUBLIC projects are discoverable by every workspace member;
+// PRIVATE projects (and their channels) only by project members, plus
+// workspace/organization managers for management metadata (never content).
+enum ProjectVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+// Exactly one OWNER per project, kept in application logic under a row lock
+// (projects.service.ts) — ownership is a role row, not a column on Project,
+// so the frozen admin delete-user flow (FK cascade) needs no changes.
+enum ProjectRole {
+  OWNER
+  MEMBER
+}
+
+// T.33 — project & task management.
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+}
+
+enum TaskStatus {
+  BACKLOG
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  URGENT
+  HIGH
+  MEDIUM
+  LOW
+}
+
 enum JoinRequestStatus {
   PENDING
   APPROVED
@@ -30,38 +94,89 @@ enum JoinRequestStatus {
 }
 
 model User {
-  id              String            @id @default(uuid())
-  username        String            @unique
-  email           String            @unique
-  password        String
+  id                      String                 @id @default(uuid())
+  username                String                 @unique
+  // Also unique case-insensitively: "User_email_lower_key" ON "User"(lower(email)),
+  // migration 20261111100000_user_email_case_insensitive_unique (T.26/T.27). Prisma
+  // cannot express expression indexes and ignores this one in migrate diff.
+  email                   String                 @unique
+  password                String
   // Workspace-level role — unifies the old email-heuristic (`isAdminUser`)
   // and the separate hardcoded admin-login check into one real DB field.
   // Not to be confused with ChannelMember.role, which is per-channel.
-  role            Role              @default(USER)
+  role                    Role                   @default(USER)
   // Replaces the old isBanned boolean — a suspended user should be able to
   // be reinstated without an admin needing to reconstruct "was this a ban or
   // a suspension" from a single flag that could only ever mean "banned".
-  status          UserStatus        @default(ACTIVE)
-  channels        Channel[]         @relation("UserCreatedChannels")
-  messages        Message[]
-  memberships     ChannelMember[]
-  invitationsSent Invitation[]      @relation("UserInvites")
-  reactions       Reaction[]
-  auditLogs       AuditLog[]        @relation("AuditLogActor")
-  ownedWorkspaces Workspace[]       @relation("WorkspaceOwner")
-  workspaces      WorkspaceMember[]
-  notifications   Notification[]
+  status                  UserStatus             @default(ACTIVE)
+  channels                Channel[]              @relation("UserCreatedChannels")
+  messages                Message[]
+  memberships             ChannelMember[]
+  invitationsSent         Invitation[]           @relation("UserInvites")
+  reactions               Reaction[]
+  auditLogs               AuditLog[]             @relation("AuditLogActor")
+  ownedWorkspaces         Workspace[]            @relation("WorkspaceOwner")
+  workspaces              WorkspaceMember[]
+  notifications           Notification[]
   // Where to land this user on login/signup — set once at signup (see
   // joinGeneralChannel in auth.service.ts) and kept in sync whenever they
   // switch workspaces (WorkspaceLayout.tsx calls PATCH /api/users/me/active-
   // workspace). SetNull rather than Cascade/Restrict: losing this is a UX
   // regression (falls back to "first workspace in the list"), not a reason
   // to block deleting the workspace itself or the user.
-  lastActiveWorkspaceId String?
-  lastActiveWorkspace   Workspace?        @relation("UserLastActiveWorkspace", fields: [lastActiveWorkspaceId], references: [id], onDelete: SetNull)
-  joinRequests    WorkspaceJoinRequest[]
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  lastActiveWorkspaceId   String?
+  lastActiveWorkspace     Workspace?             @relation("UserLastActiveWorkspace", fields: [lastActiveWorkspaceId], references: [id], onDelete: SetNull)
+  joinRequests            WorkspaceJoinRequest[]
+  inviteLinksCreated      WorkspaceInviteLink[]  @relation("InviteLinkCreator")
+  // Collaboration profile/preferences live in their own table so the User
+  // (authentication) table itself is never altered by collaboration features.
+  profile                 UserProfile?
+  organizationMemberships OrganizationMember[]
+  projectMemberships      ProjectMember[]
+  projectsCreated         Project[]              @relation("ProjectCreatedBy")
+  projectsArchived        Project[]              @relation("ProjectArchivedBy")
+  channelsArchived        Channel[]              @relation("ChannelArchivedBy")
+  // Stage 1 (T.19): company hierarchy tier, kept in its own table (relation
+  // fields only — no column of this authentication table changes).
+  accountTier             AccountTierGrant?      @relation("AccountTierHolder")
+  accountTiersGranted     AccountTierGrant[]     @relation("AccountTierGrantor")
+  // Stage 2 (T.20): single-use activation invitations (relation fields only).
+  accountInvitations      AccountInvitation[]    @relation("AccountInvitationAccount")
+  accountInvitationsSent  AccountInvitation[]    @relation("AccountInvitationCreator")
+  // T.32 (audit H1): server-side sessions behind login tokens (relation field only).
+  authSessions            AuthSession[]
+  // T.32 (audit H3): private uploads this account made (relation field only).
+  attachmentsUploaded     Attachment[]           @relation("AttachmentUploader")
+  // T.33: project & task management (relation fields only).
+  tasksCreated            Task[]                 @relation("TaskCreator")
+  tasksAssigned           Task[]                 @relation("TaskAssignee")
+  taskComments            TaskComment[]
+  taskActivity            TaskActivity[]
+  workNotifications       WorkNotification[]     @relation("WorkNotificationRecipient")
+  workNotificationsActed  WorkNotification[]     @relation("WorkNotificationActor")
+  createdAt               DateTime               @default(now())
+  updatedAt               DateTime               @updatedAt
+}
+
+// T.32 (audit H1): the server-side record behind every login JWT. The token
+// carries this row's id as its `sid` claim; `authenticate` and the Socket.IO
+// handshake accept a token only while its row exists, is unrevoked and
+// unexpired, and the account is ACTIVE (lib/sessions.ts). Logout revokes one
+// row; a password reset/change, ban, suspension or deletion revokes them all
+// (deletion by cascade). Kept in its own table so the User (authentication)
+// table itself only gains a relation field.
+model AuthSession {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  lastUsedAt DateTime  @default(now())
+  revokedAt  DateTime?
+  // Truncated User-Agent, shown in the account's session list. No IP address is stored.
+  userAgent  String?
+
+  @@index([userId, revokedAt])
 }
 
 // The tenant boundary: every Channel and Invitation now belongs to exactly
@@ -70,9 +185,9 @@ model User {
 // ADMIN/MEMBER role — the owner is *the* workspace creator and can never be
 // removed via the membership-role path (see workspaces.service.ts).
 model Workspace {
-  id          String            @id @default(uuid())
-  name        String
-  slug        String            @unique
+  id                    String                 @id @default(uuid())
+  name                  String
+  slug                  String                 @unique
   // The one workspace every authenticated user can see/access regardless of
   // WorkspaceMember rows (see requireWorkspaceAccess in workspace.middleware.ts
   // and listWorkspacesForUser below) — distinct from DEFAULT_WORKSPACE_SLUG
@@ -80,24 +195,158 @@ model Workspace {
   // for seeding/backfill purposes. At most one row should ever have this set;
   // nothing in the schema enforces that, since Prisma has no partial-unique-
   // index support here — it's upheld by convention (only the seed script sets it).
-  isDefault   Boolean           @default(false)
-  ownerId     String
+  isDefault             Boolean                @default(false)
+  // Batch 3 hierarchy: Organization → Workspace. Nullable on purpose: frozen
+  // tooling (reset.ts) can still create a workspace without one; such an
+  // orphan gets an organization lazily on first access
+  // (organizations.service#ensureWorkspaceOrganization). SetNull so an
+  // organization can never take its workspaces down with it.
+  organizationId        String?
+  organization          Organization?          @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  description           String?
+  channelCreationPolicy ChannelCreationPolicy  @default(MEMBERS)
+  ownerId               String
   // RESTRICT (default): same reasoning as Channel.creator/Message.sender —
   // an owner's account being deleted must never silently vaporize their
   // workspace. Reassign ownerId to the sentinel first if that path is ever
   // built, same pattern as everywhere else in this schema.
-  owner       User              @relation("WorkspaceOwner", fields: [ownerId], references: [id])
-  members     WorkspaceMember[]
-  channels    Channel[]
-  messages    Message[]
-  invitations Invitation[]
-  createdAt   DateTime          @default(now())
+  owner                 User                   @relation("WorkspaceOwner", fields: [ownerId], references: [id])
+  members               WorkspaceMember[]
+  channels              Channel[]
+  messages              Message[]
+  invitations           Invitation[]
+  createdAt             DateTime               @default(now())
   // Reverse side of User.lastActiveWorkspace — every user currently "parked"
   // on this workspace as their landing page. Not used directly anywhere
   // (Prisma requires the back-relation to be declared), but deleting this
   // workspace SetNulls all of these via the FK above.
-  usersLastActiveHere User[] @relation("UserLastActiveWorkspace")
-  joinRequests WorkspaceJoinRequest[]
+  usersLastActiveHere   User[]                 @relation("UserLastActiveWorkspace")
+  joinRequests          WorkspaceJoinRequest[]
+  inviteLinks           WorkspaceInviteLink[]
+  projects              Project[]              @relation("WorkspaceProjects")
+  // T.38: the workspace's "Team tasks" project, where the Team Lead dashboard
+  // files private assignments (created on first use). SetNull: deleting that
+  // project only means the next assignment creates a new one.
+  teamTasksProjectId    String?                @unique
+  teamTasksProject      Project?               @relation("WorkspaceTeamTasksProject", fields: [teamTasksProjectId], references: [id], onDelete: SetNull)
+  // Stage 3 (T.22): Member activation invitations bound to this workspace.
+  accountInvitations    AccountInvitation[]    @relation("AccountInvitationWorkspace")
+  // T.33: project & task management.
+  tasks                 Task[]
+  workNotifications     WorkNotification[]
+
+  @@index([organizationId])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([ownerId])
+}
+
+// Batch 3 — the top of the hierarchy (Organization → Workspace → Channel).
+// Existing workspaces were backfilled 1:1 into their own organization; the
+// Default Workspace's organization is flagged isDefault and grants implicit
+// MEMBER access to every account (frozen signup only creates workspace
+// memberships). Ownership is a role row, not a column, so deleting a user
+// (frozen admin flow) can never be blocked by an organization FK.
+model Organization {
+  id         String               @id @default(uuid())
+  name       String
+  slug       String               @unique
+  isDefault  Boolean              @default(false)
+  workspaces Workspace[]
+  members    OrganizationMember[]
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+}
+
+model OrganizationMember {
+  id             String           @id @default(uuid())
+  organizationId String
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           OrganizationRole @default(MEMBER)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+// Batch 3/C: Organization → Workspace → Project → Channel. Projects are
+// optional; channels opt in via Channel.projectId. Projects are archived,
+// never hard-deleted (they disappear only with their workspace).
+model Project {
+  id            String             @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace          @relation("WorkspaceProjects", fields: [workspaceId], references: [id], onDelete: Cascade)
+  // T.38: set when this is a workspace's "Team tasks" project.
+  teamTasksOf   Workspace?         @relation("WorkspaceTeamTasksProject")
+  name          String
+  description   String?
+  visibility    ProjectVisibility  @default(PUBLIC)
+  archivedAt    DateTime?
+  // SetNull: attribution only — deleting an account (frozen admin flow)
+  // must never be blocked by, or take down, a project.
+  archivedById  String?
+  archivedBy    User?              @relation("ProjectArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
+  createdById   String?
+  createdBy     User?              @relation("ProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  members       ProjectMember[]
+  channels      Channel[]
+  // T.33: lifecycle and task settings. "Archived" stays archivedAt.
+  status        ProjectStatus      @default(ACTIVE)
+  // Short code for task identifiers ("WEB-12"); derived from the name when null.
+  key           String?            @db.VarChar(6)
+  // Last task number handed out (incremented atomically per new task).
+  taskSequence  Int                @default(0)
+  // When true, only project leads may move a task to Done.
+  requireReview Boolean            @default(false)
+  startDate     DateTime?
+  dueDate       DateTime?
+  tasks         Task[]
+  notifications WorkNotification[]
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  @@index([workspaceId, archivedAt])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([createdById])
+  @@index([archivedById])
+}
+
+model ProjectMember {
+  id        String      @id @default(uuid())
+  projectId String
+  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      ProjectRole @default(MEMBER)
+  createdAt DateTime    @default(now())
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+// Reusable "anyone with the link can request to join" invite links. These
+// used to be stateless JWTs signed with the session JWT_SECRET, which meant a
+// link token was *also* accepted as a login token by `authenticate` (audit
+// finding SEC-01). Opaque random DB tokens can never be confused with a
+// session JWT, and they can be expired/revoked individually.
+model WorkspaceInviteLink {
+  id          String    @id @default(uuid())
+  // 256-bit random, base64url — never a JWT.
+  token       String    @unique
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdById String
+  createdBy   User      @relation("InviteLinkCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  useCount    Int       @default(0)
+  createdAt   DateTime  @default(now())
+
+  @@index([workspaceId, expiresAt])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([createdById])
 }
 
 model WorkspaceMember {
@@ -167,6 +416,8 @@ model AuditLog {
   createdAt  DateTime @default(now())
 
   @@index([createdAt])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([actorId])
 }
 
 // Temporary holding pen for a sign-up that hasn't proven ownership of its
@@ -211,36 +462,59 @@ model Invitation {
 }
 
 model Channel {
-  id          String          @id @default(uuid())
-  name        String?
-  description String?
+  id             String            @id @default(uuid())
+  name           String?
+  description    String?
   // Emoji string chosen via emoji-picker-react, or the literal "hash" for
   // channels using the default lucide Hash icon (also the fallback for any
   // pre-existing channel created before this field existed).
-  icon        String?         @default("hash")
-  isDM        Boolean         @default(false)
-  createdBy   String
+  icon           String?           @default("hash")
+  isDM           Boolean           @default(false)
+  // A multi-person direct conversation (3+ participants). Always isDM=true as
+  // well, so every "exclude DMs from public channel lists" filter keeps
+  // working unchanged; 1:1 DM lookups filter isGroupDM=false.
+  isGroupDM      Boolean           @default(false)
+  createdBy      String
   // Deliberately left as the default RESTRICT (not Cascade/SetNull): a
   // channel's creator being deleted must never silently delete the channel.
   // The admin delete-user flow reassigns createdBy to a "deleted user"
   // sentinel *before* deleting the row (see admin.service.ts); anything else
   // that tries to delete a user directly still gets a safe FK failure.
-  creator     User            @relation("UserCreatedChannels", fields: [createdBy], references: [id])
-  messages    Message[]
-  members     ChannelMember[]
-  workspaceId String
+  creator        User              @relation("UserCreatedChannels", fields: [createdBy], references: [id])
+  messages       Message[]
+  members        ChannelMember[]
+  workspaceId    String
   // Cascade: the workspace is the tenant boundary — deleting it tears down
   // every channel (and, transitively, every message/member/reaction) scoped
   // to it. This is a rare, fully-intentional "delete this whole tenant"
   // action, not something that happens as a side effect of anything else.
-  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // Batch 3/C: optional project. null = workspace level (every pre-existing
+  // channel). Never set for General or DMs, and only to a project of the same
+  // workspace (validated in projects.service.ts).
+  projectId      String?
+  project        Project?          @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  // Batch 3/D: defaults keep every pre-existing channel public and
+  // open-posting. ChannelMember.role stays a text column: 'admin' = Channel
+  // Owner (legacy), 'moderator', 'member'.
+  visibility     ChannelVisibility @default(PUBLIC)
+  isAnnouncement Boolean           @default(false)
+  topic          String?
+  // Archived channels are read-only; nothing is deleted.
+  archivedAt     DateTime?
+  archivedById   String?
+  archivedBy     User?             @relation("ChannelArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
 
   // No index on workspaceId at all before this — every channel-list load
   // (fires on every workspace switch, i.e. very high frequency) was a full
   // table scan once Channel has any real volume.
   @@index([workspaceId])
+  @@index([projectId])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([createdBy])
+  @@index([archivedById])
 }
 
 model Message {
@@ -278,11 +552,26 @@ model Message {
   // DB (two migrations applied there that never made it into this repo).
   // Declaring it here so schema.prisma matches reality; unused by app code.
   mentions      String[]       @default([])
+  // Client-generated idempotency key for message:send. A client that retries
+  // a send (timeout, reconnect, double-click) re-sends the same clientId, and
+  // the (senderId, clientId) unique key guarantees exactly one row. Nullable
+  // so every pre-existing row stays valid (Postgres treats NULLs as distinct).
+  clientId      String?
   reactions     Reaction[]
   notifications Notification[]
+  // T.32 (audit H3): the private upload this message carries, when it was
+  // sent after T.32 (fileUrl is then "/api/attachments/<id>"). Relation only.
+  attachment    Attachment?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
+  // P2: set only when the author edits the content (updatedAt also moves on
+  // pins, so it can't drive the "edited" indicator). Nullable and additive.
+  editedAt      DateTime?
 
+  @@unique([senderId, clientId])
+  // Thread fetches, reply counts (`_count.replies` on every history page) and
+  // the per-reply count after each send all filter on parentId.
+  @@index([parentId, createdAt])
   // Matches the exact orderBy in messages.service.ts's cursor pagination:
   // channelId (equality filter), then createdAt+id descending as the
   // compound tiebreaker sort (id is needed because createdAt alone isn't a
@@ -336,18 +625,30 @@ model Notification {
   // isRead is the second column, an efficient unread-only variant of the
   // same query/count without a second index.
   @@index([userId, isRead, createdAt(sort: Desc)])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([messageId])
 }
 
 model ChannelMember {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  isDM      Boolean  @default(false)
-  channelId String
-  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
-  role      String   @default("member")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                String    @id @default(uuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isDM              Boolean   @default(false)
+  channelId         String
+  channel           Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  role              String    @default("member")
+  // Persistent read position (server-side source of truth for unread counts
+  // across reloads, devices and tabs). Only ever moves forward. The default
+  // means existing and newly created memberships start "caught up" instead of
+  // treating a channel's whole history as unread.
+  lastReadAt        DateTime  @default(now())
+  lastReadMessageId String?
+  // Earliest message this member may see. NULL = full history (public
+  // channels, original DM participants). Set when someone is added to a group
+  // DM without sharing prior history.
+  historyFrom       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   @@unique([userId, channelId])
   // Same reasoning as WorkspaceMember.@@index([workspaceId]) above — the
@@ -355,4 +656,275 @@ model ChannelMember {
   // channelId by itself, which is what every "who's in this channel" listing
   // (channel member includes, addable-members, etc.) actually filters by.
   @@index([channelId])
+}
+
+// Collaboration profile and preferences (Batch 2). Deliberately separate from
+// User so no authentication-related table or column is modified.
+model UserProfile {
+  userId              String   @id
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // P2: optional display name (set by the user or a platform admin at account
+  // creation); the unique username stays the identifier. Nullable and additive.
+  displayName         String?
+  title               String?
+  bio                 String?
+  timezone            String?
+  // Reciprocal, like Microsoft Teams: when off, the user neither sends read
+  // receipts nor sees anyone else's.
+  readReceiptsEnabled Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+// Stage 1 (T.19) — the company hierarchy: Company Admin → Team Lead → Member.
+//  - Company Admin is the existing platform admin (User.role = ADMIN, frozen
+//    admin authentication) and is NOT represented here.
+//  - TEAM_LEAD may create workspaces/organizations and hold elevated
+//    workspace/organization roles; MEMBER may not.
+//  - No row = MEMBER (deny by default): signup, admin "Create user" and every
+//    pre-existing account start as members until a reviewed backfill or a
+//    Company Admin grant says otherwise.
+// Read from the database on every check (never from the JWT), so a change
+// takes effect on the next request.
+enum AccountTier {
+  TEAM_LEAD
+  MEMBER
+}
+
+model AccountTierGrant {
+  userId      String      @id
+  // Cascade: a tier means nothing without its account (and must never block
+  // the frozen admin delete-user flow).
+  user        User        @relation("AccountTierHolder", fields: [userId], references: [id], onDelete: Cascade)
+  tier        AccountTier
+  // Who granted it (a Company Admin, or the reviewed backfill = null).
+  // SetNull: attribution only — deleting the grantor never removes the grant.
+  grantedById String?
+  grantedBy   User?       @relation("AccountTierGrantor", fields: [grantedById], references: [id], onDelete: SetNull)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([tier])
+  @@index([grantedById])
+}
+
+// Stage 2 (T.20) — single-use activation invitations for provisioned accounts
+// (Company Admin → Team Lead now; Team Lead → Member later). No e-mail.
+//  - The account is created up front with an unknowable random password, so
+//    the normal login can never accept the temporary password.
+//  - Only hashes are stored: SHA-256 of the 256-bit link token (looked up by
+//    hash) and bcrypt of the temporary password (cleared once used/revoked).
+//  - Activation consumes the row atomically (PENDING → ACCEPTED) and sets the
+//    permanent password; no session token is ever issued by it.
+//  - EXPIRED is derived: status PENDING with expiresAt in the past.
+enum AccountInvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+}
+
+model AccountInvitation {
+  id                    String                  @id @default(uuid())
+  // The provisioned account this invitation activates. Cascade: an
+  // invitation means nothing without its account (and must never block the
+  // frozen admin delete-user flow).
+  userId                String
+  user                  User                    @relation("AccountInvitationAccount", fields: [userId], references: [id], onDelete: Cascade)
+  intendedTier          AccountTier
+  tokenHash             String                  @unique
+  tempPasswordHash      String?
+  // SHA-256 of the account's password hash when the invitation was issued.
+  // Activation refuses if the password was changed some other way since.
+  credentialFingerprint String
+  teamLabel             String?
+  // Stage 3 (T.22): for a Member invitation, the Team Lead's workspace the
+  // account joins on activation (null for Team Lead invitations). SetNull: a
+  // deleted workspace leaves the invitation (Collab access only).
+  workspaceId           String?
+  workspace             Workspace?              @relation("AccountInvitationWorkspace", fields: [workspaceId], references: [id], onDelete: SetNull)
+  status                AccountInvitationStatus @default(PENDING)
+  expiresAt             DateTime
+  failedAttempts        Int                     @default(0)
+  // SetNull: attribution only — deleting the issuing admin keeps the record.
+  createdById           String?
+  createdBy             User?                   @relation("AccountInvitationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  acceptedAt            DateTime?
+  revokedAt             DateTime?
+  // 'ADMIN' | 'TOO_MANY_ATTEMPTS' | 'REISSUED'
+  revokedReason         String?
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
+
+  @@index([userId, status])
+  @@index([createdById])
+  @@index([status, expiresAt])
+  @@index([workspaceId, status])
+}
+
+// T.32 (audit H3): a private file upload. Stored in Cloudinary with delivery
+// type "authenticated" under a random public id, so the asset is neither
+// public nor guessable; the app hands out short-lived signed URLs only after
+// checking that the caller may see the message it is attached to
+// (lib/attachments.ts). The uploader is recorded at upload time and only the
+// uploader can attach it, exactly once (messageId is set on send).
+model Attachment {
+  id           String   @id @default(uuid())
+  // Cloudinary public id (includes the "workspace-uploads/" folder).
+  publicId     String   @unique
+  resourceType String
+  deliveryType String   @default("authenticated")
+  // Cloudinary's detected format for image/video assets (null for raw files,
+  // whose extension is part of publicId).
+  format       String?
+  originalName String
+  mimeType     String
+  size         Int
+  // SetNull: a deleted account's messages survive (reassigned to the
+  // sentinel), so their attachments must too.
+  uploaderId   String?
+  uploader     User?    @relation("AttachmentUploader", fields: [uploaderId], references: [id], onDelete: SetNull)
+  // Set exactly once when the upload is sent in a message. SetNull when the
+  // message goes (channel/workspace deletion cascades): the asset is then an
+  // orphan and is destroyed by the attachment sweeper.
+  messageId    String?  @unique
+  message      Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  // T.33: a file attached to a task (SetNull: the sweeper destroys orphans).
+  taskId       String?
+  task         Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  // T.33: voice notes — recorded length and a compact waveform ("0..100" x ≤ 64).
+  durationMs   Int?
+  waveform     String?  @db.VarChar(400)
+  createdAt    DateTime @default(now())
+
+  @@index([uploaderId, createdAt])
+  @@index([taskId])
+  @@index([messageId, createdAt])
+}
+
+// T.33 — tasks. A task belongs to one project (and, denormalised for
+// workspace-wide queries such as "my tasks", to its workspace). Subtasks are
+// tasks with a parent in the same project. `number` is unique per project
+// (identifier = project key + number). `position` orders a board column.
+model Task {
+  id                String             @id @default(uuid())
+  projectId         String
+  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workspaceId       String
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  number            Int
+  title             String             @db.VarChar(200)
+  description       String?
+  status            TaskStatus         @default(TODO)
+  priority          TaskPriority       @default(MEDIUM)
+  // SetNull: attribution/assignment never blocks deleting an account.
+  creatorId         String?
+  creator           User?              @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  assigneeId        String?
+  assignee          User?              @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  parentId          String?
+  parent            Task?              @relation("Subtasks", fields: [parentId], references: [id], onDelete: Cascade)
+  subtasks          Task[]             @relation("Subtasks")
+  startDate         DateTime?
+  dueDate           DateTime?
+  estimateHours     Float?
+  actualHours       Float?
+  labels            String[]           @default([])
+  position          Float              @default(0)
+  completedAt       DateTime?
+  // Set when the overdue reminder went out (idempotent reminder job).
+  overdueNotifiedAt DateTime?
+  // T.38: a private assignment (Team Lead dashboard): visible only to its
+  // assignee, its creator and the workspace's leads — never to other members
+  // of the project or workspace. Existing tasks stay visible to their project.
+  assigneeOnly      Boolean            @default(false)
+  comments          TaskComment[]
+  activity          TaskActivity[]
+  // This task depends on (is blocked by) `dependsOn` tasks…
+  dependencies      TaskDependency[]   @relation("TaskDependencyTask")
+  // …and blocks these.
+  dependents        TaskDependency[]   @relation("TaskDependencyDependsOn")
+  attachments       Attachment[]
+  notifications     WorkNotification[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@unique([projectId, number])
+  @@index([projectId, status, position])
+  @@index([assigneeId, status])
+  @@index([creatorId, createdAt])
+  @@index([workspaceId, dueDate])
+  @@index([parentId])
+  @@index([workspaceId, assigneeId])
+}
+
+model TaskComment {
+  id        String    @id @default(uuid())
+  taskId    String
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId  String?
+  author    User?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  body      String
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+
+  @@index([taskId, createdAt])
+  @@index([authorId])
+}
+
+// Per-task history (created, status/assignee/priority/date changes, comments,
+// dependencies, shares). `data` holds the before/after values.
+model TaskActivity {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  type      String   @db.VarChar(40)
+  data      Json?
+  createdAt DateTime @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([actorId])
+}
+
+// taskId is blocked by dependsOnId. Cycles are refused by the API (checked
+// under a per-project lock).
+model TaskDependency {
+  id          String   @id @default(uuid())
+  taskId      String
+  task        Task     @relation("TaskDependencyTask", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOnId String
+  dependsOn   Task     @relation("TaskDependencyDependsOn", fields: [dependsOnId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([taskId, dependsOnId])
+  @@index([dependsOnId])
+}
+
+// T.33: in-app notifications for work items (assignment, comments, status,
+// overdue). Separate from the chat Notification table, which is tied to a
+// message.
+model WorkNotification {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation("WorkNotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  projectId   String?
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  taskId      String?
+  task        Task?     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actorId     String?
+  actor       User?     @relation("WorkNotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  type        String    @db.VarChar(40)
+  title       String    @db.VarChar(300)
+  body        String?   @db.VarChar(500)
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId, workspaceId, readAt, createdAt])
+  @@index([taskId])
+  @@index([projectId])
+  @@index([actorId])
+  @@index([workspaceId])
 }

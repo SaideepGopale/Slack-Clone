@@ -1,70 +1,27 @@
 /**
- * One-time migration script: collapses the workspace down to a single
- * universal "General" channel.
+ * RETIRED (T.32, audit M16) — this script no longer does anything.
  *
- * What it does:
- *   1. Deletes every non-DM channel (Devcons, Nexus, etc.) — their messages,
- *      reactions, and memberships cascade-delete automatically via the FK
- *      constraints in schema.prisma.
- *   2. Creates one fresh channel named "General".
- *   3. Adds every existing user as a member of it.
+ * It was a one-time migration from the single-workspace era: it deleted EVERY
+ * non-DM channel in the database (all workspaces; their messages, reactions
+ * and memberships cascaded) and then created one global "General" channel.
+ * Since channels belong to workspaces (`Channel.workspaceId` is required) the
+ * create step fails after the deletes have already run, so running it would
+ * destroy every channel and leave nothing in their place. It had no
+ * environment guard or confirmation.
  *
- * What it deliberately does NOT touch: Direct Messages. DMs are Channel rows
- * with isDM=true, and are left completely alone — this is a channel
- * consolidation, not a DM wipe.
+ * Every workspace now creates its own "General" channel when it is created
+ * (modules/workspaces/workspaces.service.ts), and the shared SmartConnect
+ * Collab workspace is reconciled at server start (lib/sharedWorkspace.ts), so
+ * there is nothing left for this script to do. It is kept only so existing
+ * references to it fail loudly and harmlessly instead of 404ing.
  *
- * Safe to re-run: it always deletes non-DM channels first (including any
- * "General" from a previous run) before creating a fresh one, so running it
- * twice just resets again rather than producing duplicates.
- *
- * Usage:  npx tsx reset-to-general-channel.ts
+ * Usage: none. Running it prints this notice and exits with status 1 without
+ * connecting to any database.
  */
-import { prisma } from './lib/prisma';
+console.error(
+  'reset-to-general-channel.ts is retired: it deleted every channel in every workspace and can no longer complete. ' +
+    'Workspaces create their own "General" channel; nothing was changed.'
+);
+process.exitCode = 1;
 
-async function main() {
-  console.log('Deleting all non-DM channels (messages/reactions/memberships cascade automatically)...');
-  const deleted = await prisma.channel.deleteMany({ where: { isDM: false } });
-  console.log(`  -> deleted ${deleted.count} channel(s).`);
-
-  const users = await prisma.user.findMany({
-    select: { id: true, username: true, role: true, createdAt: true },
-    orderBy: { createdAt: 'asc' },
-  });
-
-  if (users.length === 0) {
-    console.log('No users exist yet — nothing to seed membership for. Exiting without creating "General".');
-    return;
-  }
-
-  // Prefer an admin as the nominal creator; falls back to the earliest
-  // registered user. With only one channel in the whole app, this is mostly
-  // cosmetic metadata at this point.
-  const creator = users.find((u) => u.role === 'ADMIN') ?? users[0];
-
-  console.log(`Creating "General" (creator: ${creator.username})...`);
-  const general = await prisma.channel.create({
-    data: { name: 'General', isDM: false, createdBy: creator.id },
-  });
-
-  console.log(`Adding all ${users.length} existing user(s) as members...`);
-  await prisma.channelMember.createMany({
-    data: users.map((u) => ({
-      channelId: general.id,
-      userId: u.id,
-      role: u.id === creator.id ? 'admin' : 'member',
-    })),
-    skipDuplicates: true,
-  });
-
-  console.log(`Done. "General" channel id: ${general.id}, ${users.length} member(s) added.`);
-}
-
-main()
-  .catch((err) => {
-    console.error('Reset script failed:', err);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
-z
+export {};

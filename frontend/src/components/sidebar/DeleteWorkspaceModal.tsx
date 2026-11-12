@@ -1,78 +1,91 @@
-import axios from 'axios';
-import { AlertTriangle, Loader2 } from 'lucide-react';
-import { useState } from 'react';
+import { AlertTriangle } from 'lucide-react';
+import { FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
+import { errorMessage, workspacesApi } from '../../lib/api';
+import { useWorkspaces } from '../../pages/workspace/WorkspacesProvider';
+import { Button, Field, Modal, TextInput } from '../ui';
 
 interface DeleteWorkspaceModalProps {
   isOpen: boolean;
   onClose: () => void;
   workspaceId: string;
   workspaceName: string;
+  /** Where to go afterwards. Default: "/" (WorkspaceRedirect picks the next workspace). */
+  onDeleted?: () => void;
 }
 
-export const DeleteWorkspaceModal = ({ isOpen, onClose, workspaceId, workspaceName }: DeleteWorkspaceModalProps) => {
+/**
+ * Irreversible: deletion is owner-level on the server (workspace OWNER or
+ * organization OWNER/ADMIN, never the Default Workspace). F2: accessible
+ * dialog (ui/Modal) and the workspace name must be typed to confirm.
+ */
+export const DeleteWorkspaceModal = ({ isOpen, onClose, workspaceId, workspaceName, onDeleted }: DeleteWorkspaceModalProps) => {
   const [deleting, setDeleting] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const { remove } = useWorkspaces();
 
   if (!isOpen) return null;
 
-  const handleDelete = async () => {
+  const matches = typed.trim() === workspaceName.trim();
+  const close = () => {
+    if (deleting) return;
+    setTyped('');
+    setError(null);
+    onClose();
+  };
+
+  const handleDelete = async (e?: FormEvent) => {
+    e?.preventDefault();
+    if (!matches || deleting) return;
     setDeleting(true);
+    setError(null);
     try {
-      await axios.delete(`/api/workspaces/${workspaceId}`);
+      await workspacesApi.deleteWorkspace(workspaceId);
+      // Drop it from the shared list first, or "/" would redirect straight back (F1).
+      remove(workspaceId);
       toast.success(`"${workspaceName}" deleted.`);
-      // "/" resolves to whichever workspace the user should land in next
-      // (see WorkspaceRedirect.tsx) — simpler and more universally correct
-      // than /admin, since deleting a workspace only requires being its
-      // owner/admin, not a system admin.
-      navigate('/');
-    } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Failed to delete workspace.');
+      setTyped('');
       setDeleting(false);
       onClose();
+      if (onDeleted) onDeleted();
+      else navigate('/', { replace: true });
+    } catch (err) {
+      setError(errorMessage(err, 'Failed to delete workspace.'));
+      setDeleting(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-        <div className="p-8">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 bg-red-50 rounded-xl flex items-center justify-center text-red-600 shrink-0 border border-red-100">
-              <AlertTriangle size={22} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="text-xl font-black text-gray-900 tracking-tight truncate">Delete "{workspaceName}"?</h3>
-              <p className="text-xs text-red-500 font-bold uppercase tracking-widest leading-none mt-1">This cannot be undone</p>
-            </div>
-          </div>
-
-          <p className="text-sm text-gray-600 mb-8 leading-relaxed">
-            Are you sure? This will delete all channels and messages, along with every membership and pending
-            invitation for this workspace. Everyone in it will lose access immediately.
+    <Modal
+      title={`Delete "${workspaceName}"?`}
+      subtitle="This cannot be undone"
+      onClose={close}
+      footer={
+        <>
+          <Button variant="secondary" onClick={close} disabled={deleting}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={() => handleDelete()} loading={deleting} disabled={!matches}>
+            Delete Workspace
+          </Button>
+        </>
+      }
+    >
+      <form onSubmit={handleDelete} className="space-y-4">
+        <div className="flex gap-3 rounded-xl bg-danger-soft p-3 text-sm text-danger">
+          <AlertTriangle size={18} aria-hidden="true" className="shrink-0 mt-0.5" />
+          <p>
+            Every channel, message, membership and pending invitation in this workspace will be deleted. Everyone in it loses
+            access immediately.
           </p>
-
-          <div className="flex gap-3">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={deleting}
-              className="flex-1 px-6 py-3 border border-gray-200 text-gray-600 font-black rounded-xl hover:bg-gray-50 transition-all active:scale-95 text-sm disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleDelete}
-              disabled={deleting}
-              className="flex-1 px-6 py-3 bg-red-600 text-white font-black rounded-xl hover:bg-red-700 transition-all active:scale-95 text-sm disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {deleting ? <Loader2 size={16} className="animate-spin" /> : 'Delete Workspace'}
-            </button>
-          </div>
         </div>
-      </div>
-    </div>
+        <Field label={`Type "${workspaceName}" to confirm`} error={error}>
+          <TextInput value={typed} onChange={(e) => setTyped(e.target.value)} autoComplete="off" spellCheck={false} />
+        </Field>
+      </form>
+    </Modal>
   );
 };

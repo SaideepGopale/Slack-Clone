@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { app } from '../app';
+import { invitationFor } from './collab-helpers';
 import { authHeader, uniqueEmail, uniqueUsername } from './helpers';
 
 vi.mock('../utils/mailer', () => ({
@@ -22,10 +23,11 @@ describe('signup -> verify -> login -> me', () => {
     const email = uniqueEmail();
     const username = uniqueUsername();
     const password = 'Password123!';
+    const inviteToken = await invitationFor(email); // T.21: sign-up is invitation-only
 
     const signupRes = await request(app)
       .post('/api/auth/signup-request')
-      .send({ username, email, password });
+      .send({ username, email, password, inviteToken });
     expect(signupRes.status).toBe(200);
     expect(mockedSendOtpEmail).toHaveBeenCalledTimes(1);
 
@@ -33,7 +35,7 @@ describe('signup -> verify -> login -> me', () => {
     // email is never sent in tests, so this is the only way to get it.
     const code = mockedSendOtpEmail.mock.calls[0][1];
 
-    const verifyRes = await request(app).post('/api/auth/verify-otp').send({ email, code });
+    const verifyRes = await request(app).post('/api/auth/verify-otp').send({ email, code, inviteToken });
     expect(verifyRes.status).toBe(201);
     expect(verifyRes.body.token).toBeTruthy();
     expect(verifyRes.body.user).toMatchObject({ username, email, role: 'USER' });
@@ -51,9 +53,10 @@ describe('signup -> verify -> login -> me', () => {
     const email = uniqueEmail();
     const username = uniqueUsername();
 
-    await request(app).post('/api/auth/signup-request').send({ username, email, password: 'Password123!' });
+    const inviteToken = await invitationFor(email);
+    await request(app).post('/api/auth/signup-request').send({ username, email, password: 'Password123!', inviteToken });
 
-    const res = await request(app).post('/api/auth/verify-otp').send({ email, code: '000000' });
+    const res = await request(app).post('/api/auth/verify-otp').send({ email, code: '000000', inviteToken });
     expect(res.status).toBe(400);
   });
 
@@ -62,13 +65,14 @@ describe('signup -> verify -> login -> me', () => {
     const username = uniqueUsername();
     const password = 'Password123!';
 
-    await request(app).post('/api/auth/signup-request').send({ username, email, password });
+    const inviteToken = await invitationFor(email);
+    await request(app).post('/api/auth/signup-request').send({ username, email, password, inviteToken });
     const code = mockedSendOtpEmail.mock.calls[0][1];
-    await request(app).post('/api/auth/verify-otp').send({ email, code });
+    await request(app).post('/api/auth/verify-otp').send({ email, code, inviteToken });
 
     const secondAttempt = await request(app)
       .post('/api/auth/signup-request')
-      .send({ username: uniqueUsername(), email, password });
+      .send({ username: uniqueUsername(), email, password, inviteToken });
     expect(secondAttempt.status).toBe(400);
   });
 });
@@ -79,7 +83,8 @@ describe('direct signup (no OTP)', () => {
     const username = uniqueUsername();
     const password = 'Password123!';
 
-    const res = await request(app).post('/api/auth/signup').send({ username, email, password });
+    const inviteToken = await invitationFor(email);
+    const res = await request(app).post('/api/auth/signup').send({ username, email, password, inviteToken });
     expect(res.status).toBe(201);
     expect(res.body.token).toBeTruthy();
     expect(res.body.user).toMatchObject({ username, email, role: 'USER' });
@@ -98,17 +103,19 @@ describe('direct signup (no OTP)', () => {
     const username = uniqueUsername();
     const password = 'Password123!';
 
-    await request(app).post('/api/auth/signup').send({ username, email, password });
+    const inviteToken = await invitationFor(email);
+    await request(app).post('/api/auth/signup').send({ username, email, password, inviteToken });
     const res = await request(app)
       .post('/api/auth/signup')
-      .send({ username: uniqueUsername(), email, password });
+      .send({ username: uniqueUsername(), email, password, inviteToken });
     expect(res.status).toBe(400);
   });
 
   it('rejects a too-short password', async () => {
+    const email = uniqueEmail();
     const res = await request(app)
       .post('/api/auth/signup')
-      .send({ username: uniqueUsername(), email: uniqueEmail(), password: '123' });
+      .send({ username: uniqueUsername(), email, password: '123', inviteToken: await invitationFor(email) });
     expect(res.status).toBe(400);
   });
 });
@@ -128,6 +135,8 @@ describe('GET /api/auth/me', () => {
 
   it('rejects a malformed token', async () => {
     const res = await request(app).get('/api/auth/me').set(authHeader('not-a-real-token'));
-    expect(res.status).toBe(403);
+    // T.32 (audit H1): every authentication failure is 401 (was 403) — the
+    // client's single "session over" signal; 403 means "signed in, not allowed".
+    expect(res.status).toBe(401);
   });
 });

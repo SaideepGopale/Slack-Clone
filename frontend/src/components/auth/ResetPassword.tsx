@@ -1,19 +1,30 @@
 import axios from 'axios';
-import { ArrowRight, CheckCircle2, Loader2 } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Eye, EyeOff, Loader2 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
+import { BrandMark } from '../ui/Brand';
 
+const PASSWORD_MIN = 6;
+
+/**
+ * Reset password from an e-mailed link (/reset-password?token=…&id=…).
+ * T.32: the token is read once and then removed from the address bar and the
+ * browser history, so it does not linger after use (audit FE-13). The server
+ * applies the same password rule as everywhere else and signs out every
+ * other session of the account once the password changes.
+ */
 export const ResetPassword = () => {
+  const [{ token, id }] = useState(() => {
+    const query = new URLSearchParams(window.location.search);
+    return { token: query.get('token'), id: query.get('id') };
+  });
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [show, setShow] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<{ text: string, type: 'error' | 'success' } | null>(null);
-  
-  // URL se token aur ID nikalne ka logic
-  const query = new URLSearchParams(window.location.search);
-  const token = query.get('token');
-  const id = query.get('id');
+  const [message, setMessage] = useState<{ text: string; type: 'error' | 'success' } | null>(null);
 
   useEffect(() => {
+    if (window.location.search) window.history.replaceState(null, '', window.location.pathname);
     if (!token || !id) {
       setMessage({ text: 'Invalid or missing reset token. Please request a new link.', type: 'error' });
     }
@@ -25,102 +36,82 @@ export const ResetPassword = () => {
       setMessage({ text: 'Passwords do not match!', type: 'error' });
       return;
     }
-    if (newPassword.length < 6) {
-      setMessage({ text: 'Password must be at least 6 characters long.', type: 'error' });
+    if (newPassword.length < PASSWORD_MIN) {
+      setMessage({ text: `Password must be at least ${PASSWORD_MIN} characters long.`, type: 'error' });
       return;
     }
 
     setLoading(true);
     setMessage(null);
-
     try {
-      const res = await axios.post('/api/auth/reset-password', {
-        id,
-        token,
-        newPassword
-      });
+      const res = await axios.post('/api/auth/reset-password', { id, token, newPassword });
       setMessage({ text: res.data.message, type: 'success' });
-      
-      // 3 second baad login page pe redirect
       setTimeout(() => {
-        window.location.href = '/'; 
+        window.location.href = '/';
       }, 3000);
-      
-    } catch (err: any) {
-      setMessage({ text: err.response?.data?.error || 'Failed to reset password', type: 'error' });
+    } catch (err: unknown) {
+      setMessage({ text: (err as { response?: { data?: { error?: string } } })?.response?.data?.error || 'Failed to reset password', type: 'error' });
     } finally {
       setLoading(false);
     }
   };
 
-  // Agar success ho gaya, toh UI thoda alag dikhao
+  const fieldClass =
+    'block h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-subtle focus:border-brand disabled:cursor-not-allowed disabled:bg-surface-tertiary';
+
   if (message?.type === 'success') {
     return (
-      <div className="min-h-screen bg-[#faf9fa] flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-[2rem] shadow-xl max-w-md w-full text-center border border-gray-100">
-          <div className="w-16 h-16 bg-green-50 text-green-500 rounded-full flex items-center justify-center mx-auto mb-6">
-            <CheckCircle2 size={32} />
-          </div>
-          <h2 className="text-2xl font-black text-gray-900 mb-2">Password Updated!</h2>
-          <p className="text-gray-500 font-medium text-sm mb-8">{message.text}</p>
-          <p className="text-xs text-gray-400 font-bold uppercase tracking-widest animate-pulse">Redirecting to Login...</p>
+      <div className="flex min-h-screen items-center justify-center bg-surface-secondary p-4">
+        <div className="w-full max-w-sm rounded-2xl border border-line bg-surface p-8 text-center shadow-sm animate-fade-in" role="status">
+          <span className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-full bg-success-soft text-success">
+            <CheckCircle2 size={24} aria-hidden="true" />
+          </span>
+          <h2 className="text-lg font-semibold text-fg">Password updated</h2>
+          <p className="mt-1.5 text-sm text-fg-muted">{message.text}</p>
+          <p className="mt-6 text-xs text-fg-subtle">Taking you to sign in…</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#faf9fa] flex items-center justify-center p-4 font-sans">
-      <div className="bg-white p-8 lg:p-10 rounded-[2rem] shadow-xl max-w-md w-full border border-gray-100 relative">
-        <div className="flex items-center justify-center mb-8">
-          <div className="w-12 h-12 bg-[#350d36] rounded-xl flex items-center justify-center text-white font-black text-xl shadow-lg">S</div>
+    <div className="flex min-h-screen items-center justify-center bg-surface-secondary p-4 font-sans">
+      <div className="w-full max-w-[400px] rounded-2xl border border-line bg-surface p-8 shadow-sm animate-fade-in">
+        <div className="mb-6 flex items-center gap-2.5">
+          <BrandMark size={28} />
+          <span className="text-[15px] font-semibold tracking-[-0.01em] text-fg">SmartConnect</span>
         </div>
-        
-        <div className="text-center mb-8">
-          <h2 className="text-2xl font-black text-gray-900 tracking-tight mb-2">Create New Password</h2>
-          <p className="text-sm text-gray-400 font-medium">Your new password must be different from previous used passwords.</p>
-        </div>
+        <h2 className="text-[22px] font-semibold tracking-[-0.015em] text-fg">Create a new password</h2>
+        <p className="mt-1.5 text-sm text-fg-muted">Choose a password you have not used here before. You will be signed out on your other devices.</p>
 
         {message && (
-          <div className={`p-4 rounded-xl mb-6 text-sm font-bold flex items-center gap-2 ${message.type === 'error' ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
-            <div className={`w-1.5 h-1.5 rounded-full ${message.type === 'error' ? 'bg-red-600' : 'bg-green-600'}`} />
+          <div role="alert" className="mt-5 flex items-start gap-2 rounded-lg border border-danger/25 bg-danger-soft px-3 py-2.5 text-sm text-danger">
+            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-danger" aria-hidden="true" />
             {message.text}
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-5">
+        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
           <div>
-            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">New Password</label>
-            <input 
-              required 
-              type="password" 
-              value={newPassword} 
-              onChange={(e) => setNewPassword(e.target.value)} 
-              disabled={!token || !id}
-              className="w-full bg-gray-50 border border-transparent focus:border-gray-200 focus:bg-white rounded-xl px-4 py-3 text-sm font-bold text-gray-900 outline-none transition-all" 
-              placeholder="••••••••" 
-            />
+            <label htmlFor="reset-new" className="mb-1.5 block text-xs font-medium text-fg-muted">New password</label>
+            <div className="relative">
+              <input id="reset-new" required type={show ? 'text' : 'password'} autoComplete="new-password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} disabled={!token || !id} className={`${fieldClass} pr-10`} placeholder="••••••••" />
+              <button type="button" onClick={() => setShow((v) => !v)} aria-label={show ? 'Hide password' : 'Show password'} aria-pressed={show} className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-fg-subtle hover:text-fg">
+                {show ? <EyeOff size={15} aria-hidden="true" /> : <Eye size={15} aria-hidden="true" />}
+              </button>
+            </div>
+            <p className="mt-1.5 text-xs text-fg-subtle">At least {PASSWORD_MIN} characters.</p>
           </div>
-
           <div>
-            <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Confirm Password</label>
-            <input 
-              required 
-              type="password" 
-              value={confirmPassword} 
-              onChange={(e) => setConfirmPassword(e.target.value)} 
-              disabled={!token || !id}
-              className="w-full bg-gray-50 border border-transparent focus:border-gray-200 focus:bg-white rounded-xl px-4 py-3 text-sm font-bold text-gray-900 outline-none transition-all" 
-              placeholder="••••••••" 
-            />
+            <label htmlFor="reset-confirm" className="mb-1.5 block text-xs font-medium text-fg-muted">Confirm password</label>
+            <input id="reset-confirm" required type={show ? 'text' : 'password'} autoComplete="new-password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} disabled={!token || !id} className={fieldClass} placeholder="••••••••" />
           </div>
-
-          <button 
-            disabled={loading || !token || !id} 
-            type="submit" 
-            className="w-full py-3.5 bg-[#350d36] hover:bg-[#4a154b] text-white rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-all active:scale-[0.98] mt-6 shadow-lg shadow-purple-900/20 disabled:opacity-70"
+          <button
+            disabled={loading || !token || !id}
+            type="submit"
+            className="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-brand text-sm font-semibold text-on-brand transition-colors hover:bg-brand-hover disabled:opacity-70"
           >
-            {loading ? <Loader2 size={18} className="animate-spin" /> : <>Reset Password <ArrowRight size={16} /></>}
+            {loading ? <Loader2 size={16} className="animate-spin" aria-label="Working" /> : <>Reset password <ArrowRight size={15} aria-hidden="true" /></>}
           </button>
         </form>
       </div>

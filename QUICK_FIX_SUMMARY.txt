@@ -97,7 +97,7 @@ New Logic (بہتر):
 
 1. Admin کے طور پر Login کریں
    Email: admin@slack.com
-   Password: admin123
+   Password: <SEED_ADMIN_PASSWORD>
 
 2. Admin Panel میں جائیں
    Click: Admin icon → Admin Panel → Channel Management
@@ -110,7 +110,7 @@ New Logic (بہتر):
 4. دوسرے صارف کی طرف دیکھیں
    Open: اور ایک tab میں عام user کے طور پر login کریں
    Email: test@example.com
-   Password: password123
+   Password: <SEED_USER_PASSWORD>
 
 5. Sidebar دیکھیں
    ✅ نیا channel وہاں ہونا چاہیے!

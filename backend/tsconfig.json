@@ -12,6 +12,6 @@
     "rootDir": ".",
     "resolveJsonModule": true
   },
-  "include": ["server.ts", "app.ts", "config/**/*.ts", "modules/**/*.ts", "sockets/**/*.ts", "middleware/**/*.ts", "lib/**/*.ts", "utils/**/*.ts"],
+  "include": ["server.ts", "app.ts", "config/**/*.ts", "modules/**/*.ts", "sockets/**/*.ts", "middleware/**/*.ts", "lib/**/*.ts", "utils/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

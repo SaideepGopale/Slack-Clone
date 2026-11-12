@@ -1,14 +1,18 @@
-import { v2 as cloudinary } from 'cloudinary';
 import type { Request } from 'express';
 import multer, { StorageEngine } from 'multer';
-import { CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET, CLOUDINARY_CLOUD_NAME } from '../../config/env';
+import { PassThrough, Readable } from 'stream';
+import { randomAssetName, safeExtension, UPLOAD_FOLDER } from '../../lib/attachments';
+import { cloudinary } from '../../lib/cloudinary';
+import { baseMimeType, contentMismatch, SNIFF_BYTES, SVG_MAX_BYTES, svgProblem } from '../../lib/fileSignature';
 
-cloudinary.config({
-  cloud_name: CLOUDINARY_CLOUD_NAME,
-  api_key: CLOUDINARY_API_KEY,
-  api_secret: CLOUDINARY_API_SECRET,
-  secure: true,
-});
+/** What the storage engine records about a stored asset (read by the upload route). */
+export interface StoredAsset {
+  publicId: string;
+  resourceType: string;
+  deliveryType: string;
+  format: string | null;
+  bytes: number;
+}
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024; // 25MB — accommodates larger presentations/videos
 
@@ -37,9 +41,10 @@ const ALLOWED_MIME_TYPES = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml',
   // Videos
   'video/mp4', 'video/webm', 'video/quicktime',
-  // Audio / voice notes
-  'audio/webm', 'audio/webm;codecs=opus', 'audio/ogg', 'audio/wav',
-  'audio/mp3', 'audio/mpeg', 'audio/m4a', 'audio/x-m4a', 'audio/aac',
+  // Audio / voice notes (T.33: audio/mp4 is what Safari records; codec
+  // parameters such as ";codecs=opus" are ignored when matching)
+  'audio/webm', 'audio/ogg', 'audio/wav',
+  'audio/mp3', 'audio/mpeg', 'audio/m4a', 'audio/x-m4a', 'audio/aac', 'audio/mp4',
   // PDFs
   'application/pdf',
   // Excel
@@ -115,11 +120,18 @@ const getExtension = (originalname: string, mimetype: string): string => {
 // non-image/video mimetypes get the extension embedded here.
 const isImageOrVideo = (mimetype: string): boolean => mimetype.startsWith('image/') || mimetype.startsWith('video/');
 
+// T.32 (audit H3): the stored name is 128 random bits — never derived from
+// the filename or the time, so a file cannot be found by guessing. The
+// original filename is kept only as metadata (Attachment.originalName).
+// Raw files keep a safe extension so a download opens with the right app.
 const buildPublicId = (originalname: string, mimetype: string): string => {
-  const base = `${sanitizeFilename(originalname)}-${Date.now()}`;
+  const base = randomAssetName();
   if (isImageOrVideo(mimetype)) return base;
-  return `${base}${getExtension(originalname, mimetype)}`;
+  return `${base}${safeExtension(getExtension(originalname, mimetype))}`;
 };
+
+// Kept for reference by older code paths; no longer part of the stored name.
+void sanitizeFilename;
 
 /**
  * Hand-rolled multer StorageEngine rather than the community
@@ -136,22 +148,91 @@ const buildPublicId = (originalname: string, mimetype: string): string => {
  * audio/raw resource types under `resource_type: 'auto'`. All type
  * validation happens once, up front, in multer's fileFilter below.
  */
+/**
+ * T.33: reads the start of an upload (or, with `untilEnd`, the whole file up
+ * to `limit`) and hands back a stream that replays it followed by the rest,
+ * so the content can be checked before anything is sent to storage.
+ */
+const readHead = (stream: Readable, limit: number, untilEnd: boolean) =>
+  new Promise<{ head: Buffer; rest: Readable; complete: boolean }>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let done = false;
+    const finish = (ended: boolean) => {
+      if (done) return;
+      done = true;
+      stream.off('data', onData);
+      stream.off('end', onEnd);
+      stream.off('error', onError);
+      const head = Buffer.concat(chunks);
+      const rest = new PassThrough();
+      if (ended) rest.end(head);
+      else {
+        stream.pause();
+        rest.write(head);
+        stream.pipe(rest);
+      }
+      resolve({ head, rest, complete: ended });
+    };
+    const onData = (chunk: Buffer) => {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (untilEnd ? size > limit : size >= limit) finish(false);
+    };
+    const onEnd = () => finish(true);
+    const onError = (err: Error) => {
+      if (!done) {
+        done = true;
+        reject(err);
+      }
+    };
+    stream.on('data', onData);
+    stream.once('end', onEnd);
+    stream.once('error', onError);
+  });
+
 class CloudinaryStorage implements StorageEngine {
   _handleFile(
+    req: Request,
+    file: Express.Multer.File,
+    callback: (error?: any, info?: Partial<Express.Multer.File>) => void
+  ): void {
+    const svg = baseMimeType(file.mimetype) === 'image/svg+xml';
+    readHead(file.stream, svg ? SVG_MAX_BYTES : SNIFF_BYTES, svg).then(
+      ({ head, rest, complete }) => {
+        const problem = svg ? (complete ? svgProblem(head) : 'SVG images must be 2 MB or smaller.') : contentMismatch(file.mimetype, head);
+        if (problem) {
+          // Drain what is left so the request completes, then refuse.
+          rest.resume();
+          file.stream.resume();
+          callback(new Error(problem));
+          return;
+        }
+        this.store(req, file, rest, callback);
+      },
+      (err) => callback(err)
+    );
+  }
+
+  private store(
     _req: Request,
     file: Express.Multer.File,
+    body: Readable,
     callback: (error?: any, info?: Partial<Express.Multer.File>) => void
   ): void {
     const publicId = buildPublicId(file.originalname, file.mimetype);
 
     const uploadStream = cloudinary.uploader.upload_stream(
       {
-        folder: 'workspace-uploads',
+        folder: UPLOAD_FOLDER,
         public_id: publicId,
         // 'auto' lets Cloudinary route the file to the correct resource type
         // internally (image / video / raw) — the default ('image') rejects
         // PDFs, audio, and other documents outright.
         resource_type: 'auto',
+        // T.32 (audit H3): not publicly deliverable — only short-lived signed
+        // URLs issued after an access check can fetch it (lib/attachments.ts).
+        type: 'authenticated',
       },
       (error, result) => {
         if (error || !result) {
@@ -159,17 +240,25 @@ class CloudinaryStorage implements StorageEngine {
           return;
         }
 
+        const stored: StoredAsset = {
+          publicId: result.public_id,
+          resourceType: result.resource_type,
+          deliveryType: result.type ?? 'authenticated',
+          format: result.resource_type === 'raw' ? null : result.format ?? null,
+          bytes: result.bytes,
+        };
         callback(null, {
-          // The field the route handler reads as req.file.path — Cloudinary's
-          // secure (https) delivery URL for the uploaded asset.
-          path: result.secure_url,
+          // No public URL exists for an authenticated asset; the route hands
+          // out an app path (/api/attachments/<id>) instead.
+          path: '',
           filename: result.public_id,
           size: result.bytes,
+          ...({ stored } as object),
         });
       }
     );
 
-    file.stream.pipe(uploadStream);
+    body.pipe(uploadStream);
   }
 
   _removeFile(_req: Request, file: Express.Multer.File, callback: (error: Error | null) => void): void {
@@ -181,7 +270,12 @@ class CloudinaryStorage implements StorageEngine {
       callback(null);
       return;
     }
-    cloudinary.uploader.destroy(publicId, (error) => callback(error ?? null));
+    const stored = (file as Express.Multer.File & { stored?: StoredAsset }).stored;
+    cloudinary.uploader.destroy(
+      publicId,
+      { resource_type: stored?.resourceType ?? 'image', type: stored?.deliveryType ?? 'authenticated', invalidate: true },
+      (error) => callback(error ?? null)
+    );
   }
 }
 
@@ -189,7 +283,7 @@ export const upload = multer({
   storage: new CloudinaryStorage(),
   limits: { fileSize: MAX_FILE_SIZE },
   fileFilter: (_req, file, callback) => {
-    if (ALLOWED_MIME_TYPES.has(file.mimetype)) {
+    if (ALLOWED_MIME_TYPES.has(baseMimeType(file.mimetype))) {
       callback(null, true);
     } else {
       callback(new Error('Invalid file type. Only images, videos, audio, PDFs, Office documents (Excel, Word, PowerPoint), text, and ZIP files are allowed.'));

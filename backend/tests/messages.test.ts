@@ -2,7 +2,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { app } from '../app';
 import { prisma } from '../lib/prisma';
-import { authHeader, createAndLoginUser } from './helpers';
+import { authHeader, createAndLoginUser, createTeamLead } from './helpers';
 
 // There is no REST "create message" endpoint in this app — messages are
 // created over Socket.IO (see sockets/messages.handlers.ts), which is out of
@@ -20,7 +20,7 @@ const createWorkspaceWithChannel = async (token: string) => {
 
 describe('channel messages', () => {
   it('lets a channel member read seeded messages, but denies a non-member', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead(); // Stage 1: workspace creators are Team Leads
     const outsider = await createAndLoginUser();
     const { workspaceId, channelId } = await createWorkspaceWithChannel(owner.token);
 
@@ -48,7 +48,7 @@ describe('channel messages', () => {
   });
 
   it('toggles a reaction on a message and reflects it in the grouped summary', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead(); // Stage 1: workspace creators are Team Leads
     const { workspaceId, channelId } = await createWorkspaceWithChannel(owner.token);
 
     const message = await prisma.message.create({
@@ -74,7 +74,7 @@ describe('channel messages', () => {
   });
 
   it('returns a thread with its replies', async () => {
-    const owner = await createAndLoginUser();
+    const owner = await createTeamLead(); // Stage 1: workspace creators are Team Leads
     const { workspaceId, channelId } = await createWorkspaceWithChannel(owner.token);
 
     const parent = await prisma.message.create({

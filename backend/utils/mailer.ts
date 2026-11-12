@@ -1,4 +1,5 @@
 import { Resend } from 'resend';
+import { emailDeliveryConfigured } from '../lib/emailDelivery';
 
 // Switched from Gmail SMTP (nodemailer) to Resend's HTTP API — Render's free
 // tier silently blocks/times-out outbound SMTP (ports 587 and 465 both hung
@@ -6,16 +7,18 @@ import { Resend } from 'resend';
 // several free PaaS tiers. Resend runs entirely over HTTPS (443), which
 // isn't subject to that restriction.
 //
-// `onboarding@resend.dev` is Resend's built-in test sender — it works
-// immediately for any recipient with zero domain setup. Swap the `from`
-// address to a verified domain once you have one for a production-grade
-// sender identity.
-const FROM_ADDRESS = 'Slick Workspace <onboarding@resend.dev>';
+// Sender identity. Set EMAIL_FROM to an address on a domain you have verified
+// in Resend (e.g. "SmartConnect <no-reply@your-verified-domain>"). Without it,
+// mail goes from Resend's shared test sender `onboarding@resend.dev`, which
+// Resend only delivers to the Resend account owner's own address — fine for
+// testing, not for real users. No sender domain is assumed here.
+export const EMAIL_BRAND = 'SmartConnect';
+const DEFAULT_FROM = `${EMAIL_BRAND} <onboarding@resend.dev>`;
+export const emailFrom = () => process.env.EMAIL_FROM?.trim() || DEFAULT_FROM;
 
 const getClient = (): Resend | null => {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return null;
-  return new Resend(apiKey);
+  if (!emailDeliveryConfigured()) return null;
+  return new Resend((process.env.RESEND_API_KEY as string).trim());
 };
 
 // 1. Send Invite Email Function
@@ -27,9 +30,9 @@ export const sendInviteEmail = async (to: string, inviteLink: string, workspaceN
   }
 
   const { data, error } = await resend.emails.send({
-    from: FROM_ADDRESS,
+    from: emailFrom(),
     to,
-    subject: `You've been invited to join ${workspaceName}`,
+    subject: `You've been invited to join ${workspaceName} on ${EMAIL_BRAND}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px;">
         <h1>Join your team on ${workspaceName}</h1>
@@ -64,14 +67,14 @@ export const sendOtpEmail = async (to: string, code: string) => {
   }
 
   const { data, error } = await resend.emails.send({
-    from: FROM_ADDRESS,
+    from: emailFrom(),
     to,
-    subject: `${code} is your Slick Workspace verification code`,
+    subject: `${code} is your ${EMAIL_BRAND} verification code`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 24px; border: 1px solid #ece9f4; border-radius: 16px;">
         <div style="width: 40px; height: 40px; background: #2e1065; border-radius: 10px; color: white; font-weight: bold; font-size: 18px; display: flex; align-items: center; justify-content: center; margin-bottom: 24px;">S</div>
         <h2 style="color: #111827; margin: 0 0 8px;">Verify your email</h2>
-        <p style="color: #6b7280; font-size: 14px; margin: 0 0 24px;">Enter this code to finish creating your Slick Workspace account. It expires in 5 minutes.</p>
+        <p style="color: #6b7280; font-size: 14px; margin: 0 0 24px;">Enter this code to finish creating your ${EMAIL_BRAND} account. It expires in 5 minutes.</p>
         <div style="background: #f5f3ff; border: 1px solid #ddd6fe; border-radius: 12px; padding: 20px; text-align: center; margin-bottom: 24px;">
           <span style="font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #4c1d95;">${code}</span>
         </div>
@@ -98,13 +101,13 @@ export const sendResetPasswordEmail = async (to: string, resetLink: string) => {
   }
 
   const { data, error } = await resend.emails.send({
-    from: FROM_ADDRESS,
+    from: emailFrom(),
     to,
-    subject: 'Password Reset Request - Slick Workspace',
+    subject: `Password Reset Request - ${EMAIL_BRAND}`,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
         <h2 style="color: #350d36;">Reset Your Password</h2>
-        <p>We received a request to reset your password for your Slick Workspace account.</p>
+        <p>We received a request to reset your password for your ${EMAIL_BRAND} account.</p>
         <p>Click the button below to set a new password. This link is valid for <strong>15 minutes</strong>.</p>
         <a href="${resetLink}" style="display: inline-block; padding: 12px 24px; background-color: #e8912d; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; margin-top: 15px;">Set New Password</a>
         <p style="margin-top: 25px; font-size: 12px; color: #888;">If you didn't request this, you can safely ignore this email.</p>

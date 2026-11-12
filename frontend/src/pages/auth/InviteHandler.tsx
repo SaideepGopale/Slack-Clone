@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { useAuth } from '../../contexts/AuthContext';
+import { isInvitationToken } from '../../lib/invitationToken';
 
 interface InvitationLookup {
   valid: true;
@@ -51,14 +52,22 @@ export const InviteHandler = () => {
       setError('No invitation token was provided.');
       return;
     }
+    // FA-SEC-04: the token comes from the address bar. Only a canonical UUID
+    // is ever used — encoded — in a request path or a redirect; anything else
+    // stops here, before any request.
+    if (!isInvitationToken(token)) {
+      setError('This invitation link is invalid or has expired.');
+      return;
+    }
     startedRef.current = true;
+    const encodedToken = encodeURIComponent(token);
 
-    axios.get<InvitationLookup>(`/api/invitations/${token}`)
+    axios.get<InvitationLookup>(`/api/invitations/${encodedToken}`)
       .then(async ({ data }) => {
         if (data.isExistingUser && userRef.current) {
           try {
             const res = await axios.post<{ workspaceId: string; generalChannelId: string }>(
-              `/api/invitations/accept/${token}`
+              `/api/invitations/accept/${encodedToken}`
             );
             navigate(`/${res.data.workspaceId}/c/${res.data.generalChannelId}`, { replace: true });
           } catch (err: any) {
@@ -72,11 +81,11 @@ export const InviteHandler = () => {
         }
 
         if (data.isExistingUser) {
-          navigate(`/login?inviteToken=${token}`, { replace: true });
+          navigate(`/login?inviteToken=${encodedToken}`, { replace: true });
           return;
         }
 
-        navigate(`/signup?inviteToken=${token}&email=${encodeURIComponent(data.email)}`, { replace: true });
+        navigate(`/signup?inviteToken=${encodedToken}&email=${encodeURIComponent(data.email)}`, { replace: true });
       })
       .catch((err) => {
         setError(err.response?.data?.error || 'This invitation link is invalid or has expired.');
@@ -86,13 +95,13 @@ export const InviteHandler = () => {
   if (error) {
     return (
       <div className="min-h-screen bg-[#faf9fa] flex items-center justify-center p-4 font-sans">
-        <div className="bg-white p-8 lg:p-10 rounded-[2rem] shadow-xl max-w-md w-full border border-gray-100 text-center">
+        <div className="bg-white p-8 lg:p-10 rounded-2xl shadow-xl max-w-md w-full border border-gray-100 text-center">
           <div className="w-16 h-16 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
             <MailWarning size={32} />
           </div>
-          <h2 className="text-2xl font-black text-gray-900 mb-2">Invitation not valid</h2>
+          <h2 className="text-2xl font-semibold text-gray-900 mb-2">Invitation not valid</h2>
           <p className="text-gray-500 font-medium text-sm mb-8">{error}</p>
-          <a href="/login" className="inline-flex items-center gap-2 text-sm font-bold text-[#350d36] hover:text-purple-900">
+          <a href="/login" className="inline-flex items-center gap-2 text-sm font-bold text-brand hover:text-brand-hover">
             Go to sign in <ArrowRight size={16} />
           </a>
         </div>
@@ -102,7 +111,7 @@ export const InviteHandler = () => {
 
   return (
     <div className="min-h-screen bg-[#faf9fa] flex items-center justify-center p-4">
-      <Loader2 className="animate-spin text-[#350d36]" size={32} />
+      <Loader2 className="animate-spin text-brand" size={32} />
     </div>
   );
 };

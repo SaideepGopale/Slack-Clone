@@ -2,8 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Slack — Smart Chat App</title>
+    <!-- T.39: edge-to-edge on notched phones (safe areas handled in CSS); the layout shrinks above on-screen keyboards. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <title>SmartConnect</title>
+    <meta name="description" content="SmartConnect Collab — team messaging, calls and collaboration." />
+    <meta name="theme-color" content="#0f2629" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b1112" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- T.39: installable web app (Add to Home Screen / Install app). -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="SmartConnect" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   </head>
   <body>
     <div id="root"></div>

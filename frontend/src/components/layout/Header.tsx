@@ -1,10 +1,33 @@
-import { Calendar, Clock, HelpCircle, LogOut, Mail, Menu, Phone, Search, Settings, User as UserIcon, UserPlus } from 'lucide-react';
+import { Command, LogOut, Mail, Menu, ShieldCheck, User as UserIcon, UserPlus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { requestMessageFocusAfterNavigation } from '../../lib/messageFocus';
+import { getThemePreference, setThemePreference, ThemePreference } from '../../lib/theme';
 import { useAuth } from '../../contexts/AuthContext';
 import { useWorkspace } from '../../pages/workspace/WorkspaceContext';
+import { useWorkspaces } from '../../pages/workspace/WorkspacesProvider';
+import { ChannelSearch, SearchScope } from './ChannelSearch';
 import { InviteMemberModal } from './InviteMemberModal';
+import { ProfileSettingsModal } from '../profile/ProfileSettingsModal';
+import { SecuritySettingsModal } from '../profile/SecuritySettingsModal';
+import { Avatar } from '../ui/Avatar';
+import { BrandMark } from '../ui/Brand';
+import { TABLET_QUERY, useMediaQuery } from '../../hooks/useMediaQuery';
 
-export const Header = ({ onMenuClick }: { onMenuClick?: () => void }) => {
+export const Header = ({
+  onMenuClick,
+  searchScope = null,
+  hideOnPhone = false,
+  sidebarHidden = false,
+}: {
+  onMenuClick?: () => void;
+  searchScope?: SearchScope | null;
+  /** T.39: a full-screen conversation on a phone has its own top bar. */
+  hideOnPhone?: boolean;
+  /** T.39: tablet only — whether the collapsible sidebar is currently hidden. */
+  sidebarHidden?: boolean;
+}) => {
+  const isTablet = useMediaQuery(TABLET_QUERY);
   const { user, logout } = useAuth();
   // Shares WorkspaceLayout's already-established socket via context instead
   // of calling useSocket(token) again — Header only ever renders inside
@@ -12,8 +35,20 @@ export const Header = ({ onMenuClick }: { onMenuClick?: () => void }) => {
   // opens its own real Socket.IO connection. Before this fix, every regular
   // user session was opening two full duplicate connections for no reason.
   const { workspaceId, socket } = useWorkspace();
+  // F1: invite only when the server says so (lib/policy 'workspace.manageInvitations').
+  const currentWorkspace = useWorkspaces().getWorkspace(workspaceId);
+  const canInvite = !!currentWorkspace?.capabilities?.canManageInvitations;
+  const navigate = useNavigate();
+  // P2 Phase J: light / dark / follow the system (per browser).
+  const [themePref, setThemePref] = useState<ThemePreference>(() => getThemePreference());
+  const chooseTheme = (preference: ThemePreference) => {
+    setThemePreference(preference);
+    setThemePref(preference);
+  };
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showProfileSettings, setShowProfileSettings] = useState(false);
+  const [showSecurity, setShowSecurity] = useState(false);
   const [userStatus, setUserStatus] = useState<'active' | 'away' | 'in_meeting'>('active');
   const [statusEmoji, setStatusEmoji] = useState('🟢');
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -44,173 +79,191 @@ export const Header = ({ onMenuClick }: { onMenuClick?: () => void }) => {
     }
   };
 
+  // T.32: Escape closes the account menu and returns focus to its button.
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!isDropdownOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsDropdownOpen(false);
+        menuButtonRef.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isDropdownOpen]);
+
+  const STATUS_OPTIONS = [
+    { id: 'active', label: 'Active', dot: 'bg-presence-online' },
+    { id: 'away', label: 'Away', dot: 'bg-presence-away' },
+    { id: 'in_meeting', label: 'In a meeting', dot: 'bg-danger' },
+  ] as const;
+  const currentStatus = STATUS_OPTIONS.find((o) => o.id === userStatus) ?? STATUS_OPTIONS[0];
+  void statusEmoji;
+
   return (
-    <header className="h-12 bg-gradient-to-r from-[#350d36] to-[#4a154b] flex items-center justify-between px-5 shrink-0 z-[100] relative shadow-lg">
-      <div className="flex-1 flex items-center gap-3">
-        <button 
-          onClick={onMenuClick}
-          className="md:hidden p-2 hover:bg-white/10 rounded-lg text-gray-200 hover:text-white transition-all active:scale-95"
-        >
-          <Menu size={20} />
-        </button>
-        <div className="hidden md:flex flex-1 justify-end pr-4">
-          <button className="p-2 text-gray-200 hover:text-white hover:bg-white/10 rounded-lg transition-all" title="Recent activity">
-            <Clock size={18} />
-          </button>
-        </div>
-      </div>
-      
-      <div className="w-full max-w-2xl px-2 md:px-4 relative group">
-        <div className="absolute left-6 md:left-8 top-1/2 -translate-y-1/2 text-gray-300 group-focus-within:text-white pointer-events-none transition-all z-10">
-          <Search size={16} />
-        </div>
-        <input 
-          type="text" 
-          placeholder="Search messages, files, or people..." 
-          className="w-full bg-white/10 backdrop-blur-sm border border-white/20 focus:border-white/40 focus:bg-white/20 rounded-xl py-2.5 pl-10 md:pl-12 pr-4 text-sm text-white placeholder-gray-300 outline-none transition-all placeholder:font-normal shadow-inner"
-        />
-      </div>
-
-      <div className="flex-1 flex justify-end items-center gap-2 relative" ref={dropdownRef}>
+    // T.39: below the status bar of an installed app (safe area; 48px tall when there is none).
+    <header className={`relative z-[100] flex h-[calc(3rem+env(safe-area-inset-top))] shrink-0 items-center justify-between gap-3 bg-sidebar px-3 pt-[env(safe-area-inset-top)] sm:px-4 ${hideOnPhone ? 'max-md:hidden' : ''}`}>
+      {/* T.32: the side groups never shrink below their content on phones (the
+          search field used to slide over the menu button at 390px). */}
+      <div className="flex shrink-0 items-center gap-2 md:min-w-0 md:flex-1">
         <button
-          onClick={() => setShowInviteModal(true)}
-          className="hidden sm:flex items-center gap-2 px-3.5 py-2 bg-white/10 hover:bg-white/20 border border-white/20 hover:border-white/30 rounded-xl text-sm font-semibold text-gray-100 hover:text-white transition-all active:scale-95"
-          title="Invite people to this workspace"
+          type="button"
+          onClick={onMenuClick}
+          // T.39: phones open the navigation drawer; tablets show/hide the sidebar.
+          aria-label={isTablet ? (sidebarHidden ? 'Show sidebar' : 'Hide sidebar') : 'Open navigation'}
+          aria-expanded={isTablet ? !sidebarHidden : undefined}
+          className="rounded-lg p-2 text-sidebar-fg-muted transition-colors hover:bg-sidebar-hover hover:text-sidebar-fg lg:hidden"
         >
-          <UserPlus size={16} />
-          Invite People
+          <Menu size={18} aria-hidden="true" />
         </button>
+        <span className="hidden items-center gap-2 md:flex">
+          <BrandMark size={22} />
+          <span className="text-[13px] font-semibold tracking-[-0.01em] text-sidebar-fg">SmartConnect</span>
+        </span>
+      </div>
 
-        <button className="hidden sm:flex p-2 text-gray-200 hover:text-white hover:bg-white/10 rounded-lg transition-all items-center justify-center" title="Help & Support">
-          <HelpCircle size={18} />
+      {/* In-channel / workspace message search (F1) — scoped to the open conversation. */}
+      <ChannelSearch
+        scope={searchScope}
+        workspace={workspaceId && currentWorkspace ? { id: workspaceId, name: currentWorkspace.name } : null}
+        onOpenResult={(target) => {
+          requestMessageFocusAfterNavigation(target);
+          navigate(`/${workspaceId}/c/${target.channelId}`);
+        }}
+      />
+
+      <div className="relative flex shrink-0 items-center justify-end gap-1.5 md:flex-1" ref={dropdownRef}>
+        {/* T.33: the command palette (also ⌘K / Ctrl+K). */}
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new Event('smartconnect:open-palette'))}
+          className="flex items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-[13px] font-medium text-sidebar-fg-muted transition-colors hover:bg-sidebar-hover hover:text-sidebar-fg"
+          title="Search and jump to anything (Ctrl+K)"
+          aria-label="Search and jump to anything (Ctrl+K)"
+        >
+          <Command size={15} aria-hidden="true" />
+          <span className="hidden lg:inline">Jump to</span>
         </button>
-        
-        {/* Profile Button (Avatar) */}
-        <div 
+        {canInvite && (
+          <button
+            onClick={() => setShowInviteModal(true)}
+            type="button"
+            className="hidden items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-sidebar-fg-muted transition-colors hover:bg-sidebar-hover hover:text-sidebar-fg sm:flex"
+            title="Invite people to this workspace"
+            aria-label="Invite People"
+          >
+            <UserPlus size={15} aria-hidden="true" />
+            <span className="hidden lg:inline">Invite people</span>
+          </button>
+        )}
+
+        {/* Account menu */}
+        <button
+          ref={menuButtonRef}
+          type="button"
           onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-          className="w-9 h-9 rounded-lg bg-gradient-to-br from-[#e8912d] to-[#ff9c00] border-2 border-white/30 hover:border-white/60 flex items-center justify-center text-sm font-bold text-white cursor-pointer active:scale-95 transition-all shrink-0 select-none shadow-lg hover:shadow-xl"
+          aria-label="Account menu"
+          aria-haspopup="true"
+          aria-expanded={isDropdownOpen}
+          className="rounded-lg p-1 transition-colors hover:bg-sidebar-hover"
         >
-          {user?.username?.substring(0, 2).toUpperCase() || '??'}
-        </div>
+          <span className="relative block">
+            <Avatar name={user?.username} size="sm" initials={2} />
+            <span className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-sidebar ${currentStatus.dot}`} aria-hidden="true" />
+          </span>
+        </button>
 
-        {/* Dropdown Menu */}
         {isDropdownOpen && (
-          <div className="absolute top-12 right-0 w-[320px] bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden animate-scale-in z-50 elevation-4">
-            
-            {/* Header Section */}
-            <div className="p-5 flex items-center gap-4 border-b border-gray-100 bg-gradient-to-br from-gray-50 to-white">
-              <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-[#e8912d] to-[#ff9c00] flex items-center justify-center text-xl font-black text-white shrink-0 shadow-md">
-                {user?.username?.substring(0, 2).toUpperCase() || '??'}
-              </div>
-              <div className="overflow-hidden flex-1">
-                <h3 className="font-bold text-gray-900 truncate text-base">{user?.username}</h3>
-                <div className="flex items-center gap-2 mt-1">
-                  <div className={`w-2 h-2 rounded-full shrink-0 animate-pulse shadow-sm ${userStatus === 'active' ? 'bg-green-500 shadow-green-500/50' : userStatus === 'away' ? 'bg-yellow-500 shadow-yellow-500/50' : 'bg-red-500 shadow-red-500/50'}`}></div>
-                  <p className={`text-xs font-semibold truncate ${userStatus === 'active' ? 'text-green-600' : userStatus === 'away' ? 'text-yellow-600' : 'text-red-600'}`}>
-                    {userStatus === 'active' ? 'Active now' : userStatus === 'away' ? 'Away' : 'In Meeting'}
+          <div className="absolute right-0 top-11 z-50 w-[300px] overflow-hidden rounded-xl border border-line bg-surface text-fg shadow-xl animate-pop-in origin-top-right" role="menu" aria-label="Account">
+            <div className="flex items-center gap-3 border-b border-line p-4">
+              <Avatar name={user?.username} size="lg" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold">{user?.username}</p>
+                {user?.email && (
+                  <p className="flex items-center gap-1 truncate text-xs text-fg-subtle">
+                    <Mail size={11} aria-hidden="true" />
+                    <span className="truncate">{user.email}</span>
                   </p>
-                </div>
+                )}
               </div>
             </div>
 
-            {/* Status Selector */}
-            <div className="p-3 border-b border-gray-100">
-              <div className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2 px-2">Set Status</div>
-              <div className="space-y-2">
+            <div className="border-b border-line p-2">
+              <p className="px-2 pb-1 pt-0.5 text-[11px] font-medium text-fg-subtle">Status</p>
+              {STATUS_OPTIONS.map((option) => (
                 <button
-                  onClick={() => handleStatusChange('active')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-lg transition-all ${
-                    userStatus === 'active'
-                      ? 'bg-green-100 border border-green-300 text-green-700 font-semibold'
-                      : 'bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100'
-                  }`}
+                  key={option.id}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={userStatus === option.id}
+                  onClick={() => handleStatusChange(option.id)}
+                  className={`flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-surface-tertiary ${userStatus === option.id ? 'font-medium text-fg' : 'text-fg-muted'}`}
                 >
-                  <span className="text-lg">🟢</span>
-                  <span>Active</span>
+                  <span className={`h-2 w-2 rounded-full ${option.dot}`} aria-hidden="true" />
+                  {option.label}
+                  {userStatus === option.id && <span className="ml-auto text-xs text-brand">Current</span>}
                 </button>
-                <button
-                  onClick={() => handleStatusChange('away')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-lg transition-all ${
-                    userStatus === 'away'
-                      ? 'bg-yellow-100 border border-yellow-300 text-yellow-700 font-semibold'
-                      : 'bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100'
-                  }`}
-                >
-                  <span className="text-lg">🟡</span>
-                  <span>Away</span>
-                </button>
-                <button
-                  onClick={() => handleStatusChange('in_meeting')}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-lg transition-all ${
-                    userStatus === 'in_meeting'
-                      ? 'bg-red-100 border border-red-300 text-red-700 font-semibold'
-                      : 'bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100'
-                  }`}
-                >
-                  <span className="text-lg">🔴</span>
-                  <span>In Meeting</span>
-                </button>
-              </div>
+              ))}
             </div>
 
-            {/* Info Section */}
-            <div className="p-3">
-              <div className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-700 rounded-lg hover:bg-gray-50 transition-all">
-                <div className="w-8 h-8 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-                  <Mail size={16} className="text-blue-600" />
-                </div>
-                <span className="truncate font-medium">{user?.email || 'samarth@example.com'}</span>
-              </div>
-              
-              {/* Fake Data / Coming Soon from backend */}
-              <div className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-500 rounded-lg hover:bg-gray-50 transition-all cursor-pointer">
-                <div className="w-8 h-8 rounded-lg bg-purple-50 flex items-center justify-center shrink-0">
-                  <Calendar size={16} className="text-purple-600" />
-                </div>
-                <span className="truncate">Add Birthdate...</span>
-              </div>
-              
-              <div className="flex items-center gap-3 px-3 py-2.5 text-sm text-gray-500 rounded-lg hover:bg-gray-50 transition-all cursor-pointer">
-                <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center shrink-0">
-                  <Phone size={16} className="text-green-600" />
-                </div>
-                <span className="truncate">Add Phone Number...</span>
-              </div>
-            </div>
-
-            <div className="h-px bg-gray-200 mx-3"></div>
-
-            {/* Action Buttons */}
-            <div className="p-3">
-              <button className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-100 rounded-xl transition-all font-medium group">
-                <UserIcon size={18} className="text-gray-400 group-hover:text-gray-600 transition-colors" />
-                Profile Settings
-              </button>
-              <button className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-100 rounded-xl transition-all font-medium group">
-                <Settings size={18} className="text-gray-400 group-hover:text-gray-600 transition-colors" />
-                Preferences
-              </button>
-            </div>
-
-            <div className="h-px bg-gray-200 mx-3"></div>
-
-            {/* Logout Button */}
-            <div className="p-3">
-              <button 
-                onClick={() => {
-                  if(logout) logout();
-                  setIsDropdownOpen(false);
-                }} 
-                className="w-full flex items-center gap-3 px-4 py-3 text-sm text-red-600 hover:bg-red-50 hover:text-red-700 rounded-xl transition-all font-semibold group shadow-sm hover:shadow-md"
+            <div className="border-b border-line p-2">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => { setShowProfileSettings(true); setIsDropdownOpen(false); }}
+                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-fg-muted transition-colors hover:bg-surface-tertiary hover:text-fg"
               >
-                <LogOut size={18} className="group-hover:translate-x-0.5 transition-transform" />
-                Sign out of Workspace
+                <UserIcon size={15} aria-hidden="true" /> Profile & preferences
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => { setShowSecurity(true); setIsDropdownOpen(false); }}
+                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm text-fg-muted transition-colors hover:bg-surface-tertiary hover:text-fg"
+              >
+                <ShieldCheck size={15} aria-hidden="true" /> Password & security
+              </button>
+              <div className="px-2 pt-2">
+                <p id="theme-label" className="mb-1.5 text-[11px] font-medium text-fg-subtle">Theme</p>
+                <div role="group" aria-labelledby="theme-label" className="grid grid-cols-3 gap-1 rounded-lg bg-surface-tertiary p-1">
+                  {(['light', 'dark', 'system'] as const).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      aria-pressed={themePref === option}
+                      onClick={() => chooseTheme(option)}
+                      className={`rounded-md py-1 text-xs font-medium capitalize transition-colors ${
+                        themePref === option ? 'bg-surface text-fg shadow-sm' : 'text-fg-muted hover:text-fg'
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
 
+            <div className="p-2">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  if (logout) logout();
+                  setIsDropdownOpen(false);
+                }}
+                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium text-danger transition-colors hover:bg-danger-soft"
+              >
+                <LogOut size={15} aria-hidden="true" />
+                Sign out
+              </button>
+            </div>
           </div>
         )}
       </div>
+
+      {showProfileSettings && <ProfileSettingsModal onClose={() => setShowProfileSettings(false)} />}
+      {showSecurity && <SecuritySettingsModal onClose={() => setShowSecurity(false)} />}
 
       <InviteMemberModal
         isOpen={showInviteModal}

@@ -1,6 +1,7 @@
+import { destroyFilesOfDeletedMessages } from '../../lib/attachments';
 import { groupReactions } from '../../lib/reactionSummary';
 import { prisma } from '../../lib/prisma';
-import { isChannelMember } from '../../sockets/channelAccess';
+import { checkChannelContent, getChannelAccess, isMessageVisible, visibleHistoryFilter } from '../../sockets/channelAccess';
 
 class HttpError extends Error {
   status: number;
@@ -16,10 +17,25 @@ const messageInclude = {
     include: { user: { select: { id: true, username: true } } },
     orderBy: { createdAt: 'asc' as const },
   },
-  // Lets the frontend show "N replies" on a parent message without eagerly
-  // loading every reply's full content — those are fetched on demand, only
-  // when a thread is actually opened (see getThread below).
-  _count: { select: { replies: true } },
+};
+
+/**
+ * "N replies" on each message, without loading the replies' content (those
+ * are fetched on demand when a thread opens — getThread below).
+ *
+ * T.33: counted here for exactly the rows returned — one grouped query on
+ * the (parentId, createdAt) index. Prisma's `_count: { replies }` include on
+ * findMany generated `LEFT JOIN (SELECT parentId, COUNT(*) FROM "Message"
+ * GROUP BY parentId)` — an aggregate over the WHOLE message table on every
+ * page load. Under the 500-user load test that one query took 95% of all
+ * database time and grew with the table (T.33 §T.33.4). Same `_count` shape
+ * as before, so clients are unchanged.
+ */
+const withReplyCounts = async <T extends { id: string }>(rows: T[]): Promise<(T & { _count: { replies: number } })[]> => {
+  if (rows.length === 0) return [];
+  const counts = await prisma.message.groupBy({ by: ['parentId'], where: { parentId: { in: rows.map((r) => r.id) } }, _count: { _all: true } });
+  const byParent = new Map(counts.map((c) => [c.parentId, c._count._all]));
+  return rows.map((r) => ({ ...r, _count: { replies: byParent.get(r.id) ?? 0 } }));
 };
 
 // Reshape each message's raw Reaction rows into the same grouped
@@ -57,14 +73,52 @@ export interface MessagePage {
 export const getChannelMessages = async (
   channelId: string,
   cursor?: string,
-  limit: number = DEFAULT_PAGE_SIZE
+  limit: number = DEFAULT_PAGE_SIZE,
+  after?: string,
+  // The requesting member's visible-history window (group DM members added
+  // without shared history). Omitted = full history.
+  history: { historyFrom: Date | null } = { historyFrom: null }
 ): Promise<MessagePage> => {
   const take = Math.min(Math.max(limit, 1), MAX_PAGE_SIZE);
+  const visible = visibleHistoryFilter(history);
+
+  // Reconnect backfill: everything newer than the last message the client
+  // already has, oldest-first, so it can be appended in order. The anchor
+  // must belong to this channel — a foreign id is rejected rather than used
+  // as a position in someone else's history.
+  if (after) {
+    const anchor = await prisma.message.findFirst({
+      where: { id: after, channelId, ...visible },
+      select: { id: true, createdAt: true },
+    });
+    if (!anchor) throw new HttpError(400, 'Unknown "after" message for this channel.');
+    const newer = await prisma.message.findMany({
+      where: {
+        channelId,
+        parentId: null,
+        ...visible,
+        OR: [{ createdAt: { gt: anchor.createdAt } }, { createdAt: anchor.createdAt, id: { gt: anchor.id } }],
+      },
+      include: messageInclude,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: take + 1,
+    });
+    return {
+      messages: (await withReplyCounts(newer.slice(0, take))).map(withGroupedReactions),
+      nextCursor: null,
+      hasMore: newer.length > take,
+    };
+  }
+
+  if (cursor) {
+    const cursorRow = await prisma.message.findFirst({ where: { id: cursor, channelId, ...visible }, select: { id: true } });
+    if (!cursorRow) throw new HttpError(400, 'Unknown cursor for this channel.');
+  }
 
   const rows = await prisma.message.findMany({
     // Thread replies are fetched separately, on demand, by getThread below —
     // the channel's main list only ever shows top-level messages now.
-    where: { channelId, parentId: null },
+    where: { channelId, parentId: null, ...visible },
     include: messageInclude,
     // `id` is a required tiebreaker, not decoration: two messages can land in
     // the same millisecond (createdAt has ms precision, and a busy channel
@@ -89,7 +143,7 @@ export const getChannelMessages = async (
   return {
     // Reverse to ascending (oldest-first) order for direct rendering —
     // matches the pre-pagination endpoint's contract, just one page at a time.
-    messages: page.reverse().map(withGroupedReactions),
+    messages: (await withReplyCounts(page.reverse())).map(withGroupedReactions),
     nextCursor,
     hasMore,
   };
@@ -109,30 +163,53 @@ export const getThread = async (userId: string, messageId: string) => {
   });
   if (!parent) throw new HttpError(404, 'Message not found');
 
-  if (!(await isChannelMember(userId, parent.channelId))) {
+  const access = await getChannelAccess(userId, parent.channelId);
+  if (!access) {
     throw new HttpError(403, 'You are not a member of this channel.');
   }
+  // A member without shared history can't open threads that predate them.
+  if (!isMessageVisible(access, parent)) throw new HttpError(404, 'Message not found');
 
+  // Scoped to the parent's channel: a reply row from another channel
+  // (possible before message:send validated parentId) is never returned.
   const replies = await prisma.message.findMany({
-    where: { parentId: messageId },
+    where: { parentId: messageId, channelId: parent.channelId, ...visibleHistoryFilter(access) },
     include: messageInclude,
     orderBy: { createdAt: 'asc' },
   });
 
+  const [counted] = await withReplyCounts([parent]);
   return {
-    parent: withGroupedReactions(parent),
-    replies: replies.map(withGroupedReactions),
+    parent: withGroupedReactions(counted),
+    replies: (await withReplyCounts(replies)).map(withGroupedReactions),
   };
 };
 
-export const searchChannelMessages = async (channelId: string, query: string) => {
+export const searchChannelMessages = async (
+  channelId: string,
+  query: string,
+  history: { historyFrom: Date | null } = { historyFrom: null }
+) => {
   const messages = await prisma.message.findMany({
-    where: { channelId, content: { contains: query, mode: 'insensitive' } },
+    where: { channelId, content: { contains: query, mode: 'insensitive' }, ...visibleHistoryFilter(history) },
     include: messageInclude,
     orderBy: { createdAt: 'desc' },
     take: 50,
   });
-  return messages.map(withGroupedReactions);
+  return (await withReplyCounts(messages)).map(withGroupedReactions);
+};
+
+// P2 Phase G: the conversation's pinned top-level messages, newest first,
+// within the member's visible-history window. Independent of how much
+// history the client has paged in.
+export const getPinnedMessages = async (channelId: string, history: { historyFrom: Date | null } = { historyFrom: null }) => {
+  const messages = await prisma.message.findMany({
+    where: { channelId, parentId: null, isPinned: true, ...visibleHistoryFilter(history) },
+    include: messageInclude,
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: 50,
+  });
+  return (await withReplyCounts(messages)).map(withGroupedReactions);
 };
 
 // Admin content-moderation search — across every non-DM channel, not just
@@ -168,7 +245,10 @@ export const adminDeleteMessage = async (messageId: string): Promise<AdminDelete
   if (!existing) return { status: 'not_found' };
   if (existing.channel.isDM) return { status: 'forbidden' };
 
+  const replies = await prisma.message.findMany({ where: { parentId: messageId }, select: { id: true, fileUrl: true } });
   await prisma.message.delete({ where: { id: messageId } });
+  // T.32 (audit M10): the deleted messages' stored files go too.
+  void destroyFilesOfDeletedMessages([existing, ...replies]).catch((err) => console.error('File cleanup after moderation delete failed:', err));
 
   return {
     status: 'deleted',
@@ -189,25 +269,27 @@ export const adminDeleteMessage = async (messageId: string): Promise<AdminDelete
 export const toggleReaction = async (userId: string, messageId: string, emoji: string) => {
   const message = await prisma.message.findUnique({
     where: { id: messageId },
-    select: { channelId: true },
+    select: { channelId: true, createdAt: true },
   });
   if (!message) throw new HttpError(404, 'Message not found');
 
-  // REST has no "already in the channel's socket room" shortcut to lean on
-  // (see channelAccess.ts's isInChannelRoom) — this is a real DB check, same
-  // one requireChannelMembership uses for the channel-scoped message routes.
-  if (!(await isChannelMember(userId, message.channelId))) {
+  // Same channel + workspace membership check requireChannelMembership uses.
+  const access = await getChannelAccess(userId, message.channelId);
+  if (!access) {
     throw new HttpError(403, 'You are not a member of this channel.');
   }
+  if (!isMessageVisible(access, message)) throw new HttpError(404, 'Message not found');
+  // Batch 3/D: reactions follow the content rules (archived = read-only).
+  const denial = await checkChannelContent(userId, access, 'react');
+  if (denial) throw new HttpError(access.archived ? 409 : 403, denial);
 
-  const existing = await prisma.reaction.findUnique({
-    where: { userId_messageId_emoji: { userId, messageId, emoji } },
-  });
-
-  if (existing) {
-    await prisma.reaction.delete({ where: { id: existing.id } });
-  } else {
-    await prisma.reaction.create({ data: { userId, messageId, emoji } });
+  // T.32 (audit M13): race-safe toggle. Removing first is atomic (deleteMany
+  // on the unique key); only when nothing was removed is one added, with
+  // ON CONFLICT DO NOTHING — two concurrent toggles can no longer collide on
+  // the unique index and 500.
+  const removed = await prisma.reaction.deleteMany({ where: { userId, messageId, emoji } });
+  if (removed.count === 0) {
+    await prisma.reaction.createMany({ data: [{ userId, messageId, emoji }], skipDuplicates: true });
   }
 
   const reactions = await prisma.reaction.findMany({

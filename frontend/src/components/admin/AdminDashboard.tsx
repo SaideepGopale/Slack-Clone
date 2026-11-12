@@ -129,7 +129,7 @@ export const AdminDashboard = () => {
                 <stat.icon size={24} className="text-violet-600" />
               </div>
               {stat.live && (
-                <span className="flex items-center gap-1.5 text-[10px] font-black text-green-600 uppercase tracking-widest">
+                <span className="flex items-center gap-1.5 text-[10px] font-semibold text-green-600 uppercase tracking-widest">
                   <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
                   Live
                 </span>

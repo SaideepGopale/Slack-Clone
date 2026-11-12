@@ -104,11 +104,11 @@ All features are working correctly. The application is ready for use with a prof
 ```
 Test User:
   Email: test@example.com
-  Password: password123
+  Password: <SEED_USER_PASSWORD>
 
 Admin User:
   Email: admin@slack.com
-  Password: admin123
+  Password: <SEED_ADMIN_PASSWORD>
 
 Channel:
   general (Protected - cannot be deleted)
@@ -121,13 +121,13 @@ Channel:
 ### Login as Regular User
 ```
 Email: test@example.com
-Password: password123
+Password: <SEED_USER_PASSWORD>
 ```
 
 ### Login as Admin
 ```
 Email: admin@slack.com
-Password: admin123
+Password: <SEED_ADMIN_PASSWORD>
 ```
 
 **Note**: After login, click the admin icon (if visible) or navigate to `/admin` to access the admin panel.

@@ -18,6 +18,7 @@ import {
   toggleUserRoleHandler,
   updateUserStatusHandler,
 } from './admin.controller';
+import userProvisioningRoutes from './userProvisioning.routes';
 
 // The old hardcoded-credential POST /login here has been removed — admin
 // panel access now goes through the standard /api/auth/login, whose JWT
@@ -25,6 +26,10 @@ import {
 const router = Router();
 
 router.use(authenticate, requireAdmin);
+
+// P2: platform user provisioning (create/search/details/profile/password).
+// Mounted after the admin gate above, so it inherits it unchanged.
+router.use(userProvisioningRoutes);
 
 router.get('/stats', adminStatsHandler);
 router.get('/analytics', analyticsHandler);

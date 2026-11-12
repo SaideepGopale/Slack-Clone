@@ -1,108 +1,145 @@
-import React, { useEffect, useState } from 'react';
-import axios from 'axios';
-import { motion } from 'motion/react';
-import { Bell, Hash, MessageSquare, Clock } from 'lucide-react';
-import { format } from 'date-fns';
-import { Channel } from '../../types';
+import { formatDistanceToNow } from 'date-fns';
+import { AtSign, Bell, CheckCheck, MessageSquareReply } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityNotification, activityApi, errorMessage } from '../../lib/api';
+import { conversationLabel } from '../../lib/api/activity';
+import { MessageFocusTarget } from '../../lib/messageFocus';
+import { useWorkspace } from '../../pages/workspace/WorkspaceContext';
+import { Button, EmptyState, ErrorState, LoadingState } from '../ui';
 
 interface ActivityViewProps {
-  onSelectChannel: (channel: Channel) => void;
-  onViewChange: (view: any) => void;
+  /** Opens the conversation and brings the message into view. */
+  onOpen: (target: MessageFocusTarget) => void;
 }
 
-export const ActivityView = ({ onSelectChannel, onViewChange }: ActivityViewProps) => {
-  const [recentMessages, setRecentMessages] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+/**
+ * P2 Phase I: the workspace's Activity feed — @mentions of you and replies to
+ * your threads, newest first, live. (It used to fan out over every
+ * conversation in every workspace and list recent messages.)
+ */
+export const ActivityView = ({ onOpen }: ActivityViewProps) => {
+  const { workspaceId, socket, setActivityUnread } = useWorkspace();
+  const [items, setItems] = useState<ActivityNotification[] | null>(null);
+  const [unread, setUnread] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [onlyUnread, setOnlyUnread] = useState(false);
+
+  const load = useCallback(() => {
+    if (!workspaceId) return;
+    setError(null);
+    activityApi
+      .listNotifications(workspaceId)
+      .then((res) => {
+        setItems(res.notifications);
+        setUnread(res.unreadCount);
+      })
+      .catch((err: unknown) => setError(errorMessage(err, 'Could not load your activity.')));
+  }, [workspaceId]);
 
   useEffect(() => {
-    const fetchActivity = async () => {
-      try {
-        const channelsRes = await axios.get('/api/channels');
-        const channels = channelsRes.data;
-        
-        // Fetch last few messages from each channel. The endpoint is now
-        // cursor-paginated (see backend/modules/messages) — no params here
-        // means "most recent page," which is exactly what this view wants.
-        const allMessagesRequests = channels.map((c: any) =>
-          axios.get(`/api/channels/${c.id}/messages`).then(res =>
-            res.data.messages.map((m: any) => ({ ...m, channelName: c.name, channel: c }))
-          )
-        );
-        
-        const messagesArrays = await Promise.all(allMessagesRequests);
-        const flattenMessages = messagesArrays.flat()
-          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-          .slice(0, 30);
-          
-        setRecentMessages(flattenMessages);
-      } catch (err) {
-        console.error('Failed to fetch activity:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
+    setItems(null);
+    load();
+  }, [load]);
 
-    fetchActivity();
-  }, []);
+  useEffect(() => {
+    if (!socket) return;
+    const onNew = (n: ActivityNotification) => {
+      if (!n || n.workspaceId !== workspaceId) return;
+      setItems((prev) => (prev && !prev.some((p) => p.id === n.id) ? [n, ...prev] : prev));
+      if (!n.isRead) setUnread((c) => c + 1);
+    };
+    socket.on('notification:new', onNew);
+    return () => {
+      socket.off('notification:new', onNew);
+    };
+  }, [socket, workspaceId]);
+
+  // Keep the sidebar's Activity badge in step with this feed.
+  const loaded = items !== null;
+  useEffect(() => {
+    if (loaded) setActivityUnread?.(unread);
+  }, [loaded, unread, setActivityUnread]);
+
+  const markRead = (ids?: string[]) => {
+    if (!workspaceId) return;
+    setItems((prev) => prev?.map((n) => (!ids || ids.includes(n.id) ? { ...n, isRead: true } : n)) ?? prev);
+    setUnread((c) => (ids ? Math.max(0, c - ids.length) : 0));
+    activityApi.markNotificationsRead(workspaceId, ids).catch(() => load());
+  };
+
+  const open = (n: ActivityNotification) => {
+    if (!n.isRead) markRead([n.id]);
+    onOpen({ channelId: n.channel.id, messageId: n.message.id, parentId: n.message.parentId });
+  };
+
+  const visible = items?.filter((n) => !onlyUnread || !n.isRead) ?? [];
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-white">
-      <div className="h-16 border-b border-gray-100 flex items-center px-6 shrink-0 bg-white/80 backdrop-blur-md sticky top-0 z-10">
-        <div>
-          <h1 className="text-xl font-black text-gray-900 tracking-tight">Activity</h1>
-          <p className="text-[11px] text-gray-400 font-bold uppercase tracking-widest leading-none mt-1">See what's new across your workspace</p>
+    <div className="flex-1 flex flex-col h-full bg-surface">
+      <div className="h-16 border-b border-line flex items-center justify-between gap-3 px-6 shrink-0 bg-surface">
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold text-fg tracking-tight">Activity</h1>
+          <p className="text-xs text-fg-muted">Mentions of you and replies to your threads in this workspace</p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Button variant="ghost" size="sm" aria-pressed={onlyUnread} onClick={() => setOnlyUnread((v) => !v)}>
+            {onlyUnread ? 'Show all' : `Unread${unread ? ` (${unread})` : ''}`}
+          </Button>
+          {unread > 0 && (
+            <Button variant="secondary" size="sm" icon={<CheckCheck size={14} aria-hidden="true" />} onClick={() => markRead()}>
+              Mark all read
+            </Button>
+          )}
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 md:p-8">
+      <div className="flex-1 overflow-y-auto p-4 md:p-6">
         <div className="max-w-3xl mx-auto">
-          {loading ? (
-            <div className="flex flex-col items-center justify-center py-20">
-              <div className="w-10 h-10 border-4 border-gray-100 border-t-slack-purple rounded-full animate-spin mb-4" />
-              <p className="text-gray-400 font-black text-xs uppercase tracking-widest">Loading Activity...</p>
-            </div>
-          ) : recentMessages.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
-              <div className="w-20 h-20 bg-gray-50 rounded-[2rem] flex items-center justify-center text-gray-300 mb-6">
-                <Bell size={40} />
-              </div>
-              <h3 className="text-xl font-black text-gray-900 mb-2">No activity yet</h3>
-              <p className="text-gray-500 max-w-sm">When messages are sent in your channels, they'll show up here.</p>
-            </div>
+          {error ? (
+            <ErrorState message={error} onRetry={load} />
+          ) : items === null ? (
+            <LoadingState label="Loading activity" />
+          ) : visible.length === 0 ? (
+            <EmptyState
+              icon={<Bell size={28} aria-hidden="true" />}
+              title={onlyUnread ? "You're all caught up" : 'No activity yet'}
+              description="When someone @mentions you or replies to your thread, it shows up here."
+            />
           ) : (
-            <div className="space-y-4">
-              {recentMessages.map((msg, idx) => (
-                <motion.div
-                  key={msg.id}
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: idx * 0.03 }}
-                  onClick={() => {
-                    onViewChange('chat');
-                    onSelectChannel(msg.channel);
-                  }}
-                  className="flex gap-4 p-4 rounded-2xl border border-gray-100 hover:border-slack-purple/20 hover:shadow-lg hover:shadow-purple-900/5 cursor-pointer transition-all bg-white group"
-                >
-                  <div className="shrink-0 mt-1">
-                    <div className="w-10 h-10 bg-gray-50 rounded-xl flex items-center justify-center text-gray-400 group-hover:bg-slack-purple/10 group-hover:text-slack-purple transition-colors">
-                      {msg.channel.isDM ? <MessageSquare size={20} /> : <Hash size={20} />}
-                    </div>
-                  </div>
-                  
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-black text-gray-900 text-[14px] truncate">{msg.sender.username}</span>
-                      <span className="text-[11px] text-gray-400 font-bold uppercase tracking-tighter">in</span>
-                      <span className="text-[11px] font-black text-slack-purple bg-slack-purple/5 px-2 py-0.5 rounded uppercase tracking-widest">{msg.channelName}</span>
-                      <span className="text-[10px] text-gray-400 ml-auto font-medium">{format(new Date(msg.createdAt), 'HH:mm')}</span>
-                    </div>
-                    <p className="text-sm text-gray-600 line-clamp-2 font-medium leading-relaxed">
-                      {msg.content || (msg.fileUrl ? 'Sent a file' : 'Sent a message')}
-                    </p>
-                  </div>
-                </motion.div>
+            <ul className="flex flex-col gap-1.5" aria-label="Activity">
+              {visible.map((n) => (
+                <li key={n.id}>
+                  <button
+                    type="button"
+                    onClick={() => open(n)}
+                    className={`w-full text-left flex gap-3 rounded-xl border px-4 py-3 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus ${
+                      n.isRead ? 'border-line bg-surface hover:bg-surface-secondary' : 'border-brand-muted bg-brand-soft hover:bg-brand-muted'
+                    }`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="w-9 h-9 shrink-0 rounded-lg bg-brand text-on-brand flex items-center justify-center font-bold uppercase"
+                    >
+                      {n.message.sender.username[0]}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5 text-xs text-fg-muted">
+                        {n.type === 'MENTION' ? <AtSign size={12} aria-hidden="true" /> : <MessageSquareReply size={12} aria-hidden="true" />}
+                        {/* Explicit spaces: flex gaps don't put any in the accessible text. */}
+                        <span className="font-semibold text-fg">{n.message.sender.username}</span>{' '}
+                        <span>{n.type === 'MENTION' ? 'mentioned you in' : 'replied to your thread in'}</span>{' '}
+                        <span className="font-semibold text-fg truncate">{conversationLabel(n.channel)}</span>{' '}
+                        <span aria-hidden="true">·</span>{' '}
+                        <time dateTime={n.createdAt}>{formatDistanceToNow(new Date(n.createdAt), { addSuffix: true })}</time>
+                        {!n.isRead && <span className="sr-only"> (unread)</span>}
+                      </span>
+                      <span className="block mt-1 text-sm text-fg break-words">{n.message.preview}</span>
+                    </span>
+                    {!n.isRead && <span aria-hidden="true" className="mt-1.5 w-2 h-2 rounded-full bg-brand shrink-0" />}
+                  </button>
+                </li>
               ))}
-            </div>
+            </ul>
           )}
         </div>
       </div>

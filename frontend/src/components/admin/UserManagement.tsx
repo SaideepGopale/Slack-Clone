@@ -2,168 +2,341 @@ import axios from 'axios';
 import {
   Ban,
   Download,
+  Eye,
+  EyeOff,
   KeyRound,
   Mail,
   MoreVertical,
   RotateCcw,
+  Search,
   ShieldCheck,
   Trash2,
-  UserCog,
-  User as UserIcon,
   UserMinus,
+  UserPlus,
+  Users,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { useSocket } from '../../hooks/useSocket';
+import { adminUsersApi, errorMessage } from '../../lib/api';
+import type { AccountStatus, AdminUser, AdminUserDetails } from '../../lib/api/adminUsers';
+import { Badge, Button, EmptyState, ErrorState, Field, LoadingState, Menu, Modal, TextInput, useConfirm } from '../ui';
+import type { MenuItem } from '../ui';
 
-type UserRole = 'USER' | 'ADMIN';
-type UserAccountStatus = 'ACTIVE' | 'SUSPENDED' | 'BANNED';
-
-interface AdminUser {
-  id: string;
-  username: string;
-  email: string;
-  role: UserRole;
-  status: UserAccountStatus;
-  createdAt: string;
-}
+/**
+ * Platform user management (P2). Platform admins create accounts directly
+ * (no e-mail, OTP or invitation link), search them server-side, inspect
+ * workspace memberships and manage status, role and credentials. Workspace
+ * membership itself is managed by each workspace's own admins.
+ */
 
 interface PresenceUser {
   id: string;
-  username: string;
   status: string;
-  emoji: string;
 }
 
-const STATUS_BADGE_STYLES: Record<UserAccountStatus, string> = {
-  ACTIVE: 'bg-green-100 border-green-200 text-green-700',
-  SUSPENDED: 'bg-yellow-100 border-yellow-200 text-yellow-700',
-  BANNED: 'bg-red-100 border-red-200 text-red-700',
+const STATUS_TONE: Record<AccountStatus, 'success' | 'warning' | 'danger'> = { ACTIVE: 'success', SUSPENDED: 'warning', BANNED: 'danger' };
+const STATUS_FILTERS: { value: AccountStatus | ''; label: string }[] = [
+  { value: '', label: 'All accounts' },
+  { value: 'ACTIVE', label: 'Active' },
+  { value: 'SUSPENDED', label: 'Suspended' },
+  { value: 'BANNED', label: 'Banned' },
+];
+const PASSWORD_MIN = 6;
+const USERNAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{1,38}[A-Za-z0-9]$/;
+
+const formatDate = (iso: string) => new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+const initials = (u: { displayName: string | null; username: string }) => (u.displayName || u.username).trim().charAt(0).toUpperCase() || '?';
+
+const PasswordInput = ({ id, value, onChange, autoFocus }: { id?: string; value: string; onChange: (v: string) => void; autoFocus?: boolean }) => {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="relative">
+      <TextInput
+        id={id}
+        type={visible ? 'text' : 'password'}
+        autoComplete="new-password"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        autoFocus={autoFocus}
+        className="pr-10"
+      />
+      <button
+        type="button"
+        onClick={() => setVisible((v) => !v)}
+        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-fg-subtle hover:text-fg"
+        aria-label={visible ? 'Hide password' : 'Show password'}
+      >
+        {visible ? <EyeOff size={16} /> : <Eye size={16} />}
+      </button>
+    </div>
+  );
+};
+
+const CreateUserModal = ({ onClose, onCreated }: { onClose: () => void; onCreated: (user: AdminUser) => void }) => {
+  const [form, setForm] = useState({ username: '', loginId: '', password: '', displayName: '', status: 'ACTIVE' as 'ACTIVE' | 'SUSPENDED' });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const set = (key: keyof typeof form) => (value: string) => setForm((f) => ({ ...f, [key]: value }));
+
+  const problems = {
+    username: form.username && !USERNAME_PATTERN.test(form.username.trim()) ? '3–40 letters, numbers, ".", "_" or "-".' : null,
+    loginId: form.loginId && (/\s/.test(form.loginId.trim()) || form.loginId.trim().length < 3) ? 'At least 3 characters, no spaces.' : null,
+    password: form.password && form.password.length < PASSWORD_MIN ? `At least ${PASSWORD_MIN} characters.` : null,
+  };
+  const ready = USERNAME_PATTERN.test(form.username.trim()) && form.loginId.trim().length >= 3 && !problems.loginId && form.password.length >= PASSWORD_MIN;
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!ready || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const user = await adminUsersApi.createUser({
+        username: form.username.trim(),
+        loginId: form.loginId.trim(),
+        password: form.password,
+        status: form.status,
+        ...(form.displayName.trim() ? { displayName: form.displayName.trim() } : {}),
+      });
+      onCreated(user);
+    } catch (err) {
+      setError(errorMessage(err, 'Could not create the account.'));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="Create user"
+      subtitle="The account can sign in immediately with these credentials. No e-mail is sent."
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button type="submit" form="create-user-form" loading={saving} disabled={!ready} icon={<UserPlus size={15} aria-hidden="true" />}>
+            Create user
+          </Button>
+        </>
+      }
+    >
+      <form id="create-user-form" onSubmit={submit} className="space-y-4" noValidate>
+        {error && <p role="alert" className="text-sm text-danger bg-danger-soft rounded-lg px-3 py-2">{error}</p>}
+        <Field label="Username" hint="Shown to colleagues. Letters, numbers, dots, dashes, underscores." error={problems.username}>
+          <TextInput autoComplete="off" value={form.username} onChange={(e) => set('username')(e.target.value)} autoFocus placeholder="sam" />
+        </Field>
+        <Field label="Login (e-mail or identifier)" hint="What the person types to sign in." error={problems.loginId}>
+          <TextInput autoComplete="off" value={form.loginId} onChange={(e) => set('loginId')(e.target.value)} placeholder="sam@2003" />
+        </Field>
+        <Field label="Password" hint={`At least ${PASSWORD_MIN} characters. Share it with the person securely.`} error={problems.password}>
+          <PasswordInput value={form.password} onChange={set('password')} />
+        </Field>
+        <Field label="Display name (optional)">
+          <TextInput autoComplete="off" value={form.displayName} maxLength={80} onChange={(e) => set('displayName')(e.target.value)} placeholder="Sam Patel" />
+        </Field>
+        <Field label="Initial status">
+          <select
+            value={form.status}
+            onChange={(e) => set('status')(e.target.value)}
+            className="w-full h-10 rounded-xl border border-line bg-surface text-fg text-sm px-3"
+          >
+            <option value="ACTIVE">Active — can sign in now</option>
+            <option value="SUSPENDED">Suspended — cannot sign in yet</option>
+          </select>
+        </Field>
+      </form>
+    </Modal>
+  );
+};
+
+const UserDetailsModal = ({ userId, onClose, onChanged }: { userId: string; onClose: () => void; onChanged: () => void }) => {
+  const [details, setDetails] = useState<AdminUserDetails | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState<'name' | 'password' | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    adminUsersApi
+      .getUser(userId)
+      .then((d) => {
+        setDetails(d);
+        setDisplayName(d.displayName ?? '');
+      })
+      .catch((err) => setError(errorMessage(err, 'Could not load this account.')));
+  }, [userId]);
+  useEffect(load, [load]);
+
+  const saveName = async () => {
+    setBusy('name');
+    setNotice(null);
+    try {
+      setDetails(await adminUsersApi.updateProfile(userId, displayName));
+      setNotice('Display name saved.');
+      onChanged();
+    } catch (err) {
+      setNotice(errorMessage(err, 'Could not save the display name.'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const savePassword = async () => {
+    setBusy('password');
+    setNotice(null);
+    try {
+      await adminUsersApi.setPassword(userId, password);
+      setPassword('');
+      setNotice('New password set. Their open sessions were signed out of live updates.');
+    } catch (err) {
+      setNotice(errorMessage(err, 'Could not set the password.'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Modal title={details ? details.displayName || details.username : 'Account'} subtitle={details ? `@${details.username}` : undefined} onClose={onClose} size="lg">
+      {error ? (
+        <ErrorState message={error} onRetry={load} />
+      ) : !details ? (
+        <LoadingState label="Loading account" />
+      ) : (
+        <div className="space-y-6">
+          {notice && <p role="status" className="text-sm text-fg bg-surface-tertiary rounded-lg px-3 py-2">{notice}</p>}
+          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
+            <div><dt className="text-fg-subtle text-xs uppercase tracking-wider">Login</dt><dd className="text-fg font-medium break-all">{details.loginId}</dd></div>
+            <div><dt className="text-fg-subtle text-xs uppercase tracking-wider">Status</dt><dd><Badge tone={STATUS_TONE[details.status]}>{details.status}</Badge></dd></div>
+            <div><dt className="text-fg-subtle text-xs uppercase tracking-wider">Platform role</dt><dd className="text-fg">{details.role === 'ADMIN' ? 'Platform admin' : 'User'}</dd></div>
+            <div>
+              <dt className="text-fg-subtle text-xs uppercase tracking-wider">Created</dt>
+              <dd className="text-fg">{formatDate(details.createdAt)} · {details.createdBy ? `by ${details.createdBy}` : 'self-registered'}</dd>
+            </div>
+          </dl>
+
+          <section aria-labelledby="ws-heading">
+            <h3 id="ws-heading" className="text-xs font-bold uppercase tracking-wider text-fg-subtle mb-2">Workspaces ({details.workspaces.length})</h3>
+            {details.workspaces.length === 0 ? (
+              <p className="text-sm text-fg-muted">Not a member of any workspace yet.</p>
+            ) : (
+              <ul className="divide-y divide-line border border-line rounded-xl overflow-hidden">
+                {details.workspaces.map((w) => (
+                  <li key={w.workspaceId} className="flex items-center justify-between gap-3 px-3 py-2 bg-surface">
+                    <span className="text-sm text-fg truncate">{w.name}</span>
+                    <span className="flex items-center gap-1.5 shrink-0">
+                      {w.shared && <Badge tone="brand">Shared</Badge>}
+                      <Badge>{w.role.toLowerCase()}</Badge>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Field label="Display name">
+                <TextInput value={displayName} maxLength={80} onChange={(e) => setDisplayName(e.target.value)} />
+              </Field>
+              <Button size="sm" variant="secondary" loading={busy === 'name'} onClick={saveName}>Save name</Button>
+            </div>
+            <div className="space-y-2">
+              <Field label="Set a new password" hint={`At least ${PASSWORD_MIN} characters.`}>
+                <PasswordInput value={password} onChange={setPassword} />
+              </Field>
+              <Button size="sm" variant="secondary" icon={<KeyRound size={14} aria-hidden="true" />} loading={busy === 'password'} disabled={password.length < PASSWORD_MIN} onClick={savePassword}>
+                Set password
+              </Button>
+            </div>
+          </section>
+        </div>
+      )}
+    </Modal>
+  );
 };
 
 export const UserManagement = () => {
   const { token, user: currentUser } = useAuth();
   const socket = useSocket(token);
+  const { confirm, dialog } = useConfirm();
   const [users, setUsers] = useState<AdminUser[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [onlineUsers, setOnlineUsers] = useState<Map<string, PresenceUser>>(new Map());
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState<AccountStatus | ''>('');
+  const [online, setOnline] = useState<Map<string, PresenceUser>>(new Map());
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const menuContainerRef = useRef<HTMLDivElement | null>(null);
+  const [notice, setNotice] = useState<{ tone: 'success' | 'danger'; text: string } | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const requestRef = useRef(0);
 
-  const fetchUsers = async () => {
+  const load = useCallback(async (append = false, cursor: string | null = null) => {
+    const ticket = ++requestRef.current;
+    append ? setLoadingMore(true) : setLoading(true);
     try {
-      const res = await axios.get<{ users: AdminUser[] }>('/api/admin/stats');
-      setUsers(res.data.users);
+      const page = await adminUsersApi.listUsers({ q: query.trim(), status, cursor });
+      if (ticket !== requestRef.current) return; // a newer search superseded this one
+      setUsers((prev) => (append ? [...prev, ...page.users] : page.users));
+      setNextCursor(page.nextCursor);
+      setLoadError(null);
     } catch (err) {
-      console.error('Failed to fetch users', err);
-      setError('Failed to load users');
+      if (ticket === requestRef.current) setLoadError(errorMessage(err, 'Could not load accounts.'));
     } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchUsers();
-  }, []);
-
-  // Close whichever row's action dropdown is open on any click outside it.
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuContainerRef.current && !menuContainerRef.current.contains(e.target as Node)) {
-        setOpenMenuId(null);
+      if (ticket === requestRef.current) {
+        setLoading(false);
+        setLoadingMore(false);
       }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    }
+  }, [query, status]);
 
-  // Same presence-delta pattern used elsewhere: one full snapshot via
-  // presence:init, then single-user deltas via user:online/user:offline.
+  useEffect(() => {
+    const timer = setTimeout(() => load(false), 250); // debounce typing
+    return () => clearTimeout(timer);
+  }, [load]);
+
   useEffect(() => {
     if (!socket) return;
-
-    const applyDelta = (map: Map<string, PresenceUser>) => setOnlineUsers(new Map(map));
-
-    const handlePresenceInit = (data: { users: PresenceUser[] }) => {
-      setOnlineUsers(new Map(data.users.map(u => [u.id, u])));
-    };
-    const handleUserOnline = (delta: PresenceUser) => {
-      setOnlineUsers(prev => {
-        const next = new Map(prev);
-        next.set(delta.id, delta);
-        return next;
-      });
-    };
-    const handleUserOffline = ({ id }: { id: string }) => {
-      setOnlineUsers(prev => {
+    const init = (data: { users: PresenceUser[] }) => setOnline(new Map(data.users.map((u) => [u.id, u])));
+    const up = (u: PresenceUser) => setOnline((prev) => new Map(prev).set(u.id, u));
+    const down = ({ id }: { id: string }) =>
+      setOnline((prev) => {
         const next = new Map(prev);
         next.delete(id);
         return next;
       });
-    };
-
-    socket.on('presence:init', handlePresenceInit);
-    socket.on('user:online', handleUserOnline);
-    socket.on('user:offline', handleUserOffline);
-
+    socket.on('presence:init', init);
+    socket.on('user:online', up);
+    socket.on('user:offline', down);
     return () => {
-      socket.off('presence:init', handlePresenceInit);
-      socket.off('user:online', handleUserOnline);
-      socket.off('user:offline', handleUserOffline);
+      socket.off('presence:init', init);
+      socket.off('user:online', up);
+      socket.off('user:offline', down);
     };
   }, [socket]);
 
-  const filteredUsers = users.filter(user =>
-    user.username?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.email?.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  const flash = (setter: (v: string | null) => void, text: string) => {
-    setter(text);
-    setTimeout(() => setter(null), 3000);
+  const flash = (tone: 'success' | 'danger', text: string) => {
+    setNotice({ tone, text });
+    window.setTimeout(() => setNotice((n) => (n?.text === text ? null : n)), 4000);
   };
 
-  const runAction = async (userId: string, action: () => Promise<unknown>, successMsg: string) => {
-    setBusyId(userId);
-    setOpenMenuId(null);
+  const run = async (u: AdminUser, action: () => Promise<unknown>, done: string) => {
+    setBusyId(u.id);
     try {
       await action();
-      await fetchUsers();
-      flash(setSuccess, successMsg);
-    } catch (err: any) {
-      flash(setError, err.response?.data?.error || 'Action failed');
+      flash('success', done);
+      await load(false);
+    } catch (err) {
+      flash('danger', errorMessage(err, 'That action failed.'));
     } finally {
       setBusyId(null);
     }
   };
 
-  const handleToggleRole = (u: AdminUser) => {
-    const nextRole = u.role === 'ADMIN' ? 'member' : 'admin';
-    runAction(u.id, () => axios.patch(`/api/admin/users/${u.id}/role`), `${u.username} is now a ${nextRole}`);
-  };
-
-  const handleSetStatus = (u: AdminUser, status: UserAccountStatus) => {
-    runAction(
-      u.id,
-      () => axios.patch(`/api/admin/users/${u.id}/status`, { status }),
-      `${u.username} is now ${status.toLowerCase()}`
-    );
-  };
-
-  const handleForceReset = (u: AdminUser) => {
-    runAction(u.id, () => axios.post(`/api/admin/users/${u.id}/force-reset`), `Password reset email sent to ${u.username}`);
-  };
-
-  const handleDeleteUser = (u: AdminUser) => {
-    if (!confirm(`Permanently delete "${u.username}" and all their data? This cannot be undone.`)) return;
-    runAction(u.id, () => axios.delete(`/api/admin/users/${u.id}`), `${u.username} deleted`);
-  };
-
-  const handleExportCsv = async () => {
+  const exportCsv = async () => {
     try {
       const res = await axios.get('/api/admin/export/users', { responseType: 'blob' });
       const url = window.URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }));
@@ -174,237 +347,169 @@ export const UserManagement = () => {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('Failed to export users', err);
-      flash(setError, 'Failed to export users');
+    } catch {
+      flash('danger', 'Could not export users.');
     }
   };
 
-  const getStatusDisplay = (userId: string) => {
-    const presence = onlineUsers.get(userId);
-    if (!presence) return { statusText: 'Offline', statusColor: 'bg-gray-100 border-gray-200 text-gray-700', emoji: '⚫' };
-    if (presence.status === 'away') return { statusText: 'Away', statusColor: 'bg-yellow-100 border-yellow-200 text-yellow-700', emoji: '🟡' };
-    if (presence.status === 'in_meeting') return { statusText: 'In Meeting', statusColor: 'bg-red-100 border-red-200 text-red-700', emoji: '🔴' };
-    return { statusText: 'Active', statusColor: 'bg-green-100 border-green-200 text-green-700', emoji: '🟢' };
+  const menuFor = (u: AdminUser): MenuItem[] => [
+    { id: 'details', label: 'View details', icon: <Users size={15} />, onSelect: () => setViewing(u.id) },
+    {
+      id: 'role',
+      label: u.role === 'ADMIN' ? 'Remove platform admin' : 'Make platform admin',
+      icon: <ShieldCheck size={15} />,
+      onSelect: async () => {
+        if (await confirm({ title: u.role === 'ADMIN' ? 'Remove platform admin?' : 'Make platform admin?', message: `${u.username} ${u.role === 'ADMIN' ? 'will lose' : 'will gain'} access to platform administration.`, confirmLabel: 'Confirm' })) {
+          run(u, () => adminUsersApi.toggleRole(u.id), `${u.username}'s platform role was updated.`);
+        }
+      },
+    },
+    ...(u.status === 'ACTIVE'
+      ? [
+          { id: 'suspend', label: 'Suspend', icon: <UserMinus size={15} />, onSelect: () => run(u, () => adminUsersApi.setStatus(u.id, 'SUSPENDED'), `${u.username} is suspended.`) },
+          {
+            id: 'ban',
+            label: 'Ban',
+            icon: <Ban size={15} />,
+            danger: true,
+            onSelect: async () => {
+              if (await confirm({ title: `Ban ${u.username}?`, message: 'They are signed out of live sessions and can no longer sign in.', confirmLabel: 'Ban', tone: 'danger' })) {
+                run(u, () => adminUsersApi.setStatus(u.id, 'BANNED'), `${u.username} is banned.`);
+              }
+            },
+          },
+        ]
+      : [{ id: 'reactivate', label: 'Reactivate', icon: <RotateCcw size={15} />, onSelect: () => run(u, () => adminUsersApi.setStatus(u.id, 'ACTIVE'), `${u.username} is active again.`) }]),
+    { id: 'password', label: 'Set password…', icon: <KeyRound size={15} />, onSelect: () => setViewing(u.id) },
+    { id: 'reset-email', label: 'Send reset e-mail', icon: <Mail size={15} />, onSelect: () => run(u, () => adminUsersApi.sendResetEmail(u.id), `A reset e-mail was requested for ${u.username}.`) },
+    {
+      id: 'delete',
+      label: 'Delete account',
+      icon: <Trash2 size={15} />,
+      danger: true,
+      onSelect: async () => {
+        if (await confirm({ title: `Delete ${u.username}?`, message: 'Their messages are kept under "deleted user". This cannot be undone.', confirmLabel: 'Delete', tone: 'danger' })) {
+          run(u, () => adminUsersApi.deleteUser(u.id), `${u.username} was deleted.`);
+        }
+      },
+    },
+  ];
+
+  const presenceOf = (id: string) => {
+    const p = online.get(id);
+    if (!p) return { label: 'Offline', dot: 'bg-fg-subtle' };
+    if (p.status === 'away') return { label: 'Away', dot: 'bg-amber-400' };
+    if (p.status === 'in_meeting') return { label: 'In a meeting', dot: 'bg-rose-500' };
+    return { label: 'Online', dot: 'bg-emerald-500' };
   };
 
+  const summary = useMemo(() => (loading ? 'Loading accounts…' : `${users.length}${nextCursor ? '+' : ''} account${users.length === 1 ? '' : 's'}`), [loading, users.length, nextCursor]);
+
   return (
-    <div className="p-8 h-full flex flex-col animate-in fade-in slide-in-from-bottom-4 duration-500 bg-gray-50">
-
-      {error && (
-        <div className="mb-4 p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg font-medium">
-          <div className="flex justify-between">
-            <span>{error}</span>
-            <button onClick={() => setError(null)}>×</button>
-          </div>
-        </div>
-      )}
-
-      {success && (
-        <div className="mb-4 p-4 bg-green-50 border border-green-200 text-green-700 rounded-lg font-medium">
-          {success}
-        </div>
-      )}
-
-      {/* Header & Search */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+    <div className="h-full flex flex-col bg-surface-secondary p-4 sm:p-8 gap-6 overflow-y-auto">
+      <header className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 tracking-tight flex items-center gap-3">
-            <div className="p-2 bg-violet-100 rounded-lg">
-              <UserCog className="text-violet-600" size={28} />
-            </div>
-            User Access Control
-          </h1>
-          <p className="text-gray-600 font-medium text-sm mt-2">Manage {users.length} workspace members</p>
+          <h1 className="text-2xl font-bold text-fg tracking-tight">Users</h1>
+          <p className="text-sm text-fg-muted mt-1">Create and manage platform accounts. Each workspace's admins decide who joins their workspace.</p>
         </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="secondary" icon={<Download size={15} aria-hidden="true" />} onClick={exportCsv}>Export CSV</Button>
+          <Button icon={<UserPlus size={15} aria-hidden="true" />} onClick={() => setCreating(true)}>Create user</Button>
+        </div>
+      </header>
 
-        <div className="flex items-center gap-3">
-          <div className="relative group">
-            <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-violet-600 transition-colors" size={18} />
-            <input
-              type="text"
-              placeholder="Search by name or email..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full md:w-72 bg-white border border-gray-200 text-gray-900 placeholder:text-gray-400 text-sm rounded-lg pl-10 pr-4 py-3 outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100 transition-all shadow-sm"
-            />
-          </div>
-          <button
-            onClick={handleExportCsv}
-            className="flex items-center gap-2 px-4 py-3 bg-white border border-gray-200 rounded-lg text-sm font-bold text-gray-700 hover:bg-gray-50 hover:border-gray-300 transition-all shadow-sm shrink-0"
-          >
-            <Download size={16} />
-            Export CSV
-          </button>
-        </div>
+      {notice && (
+        <p role="status" className={`text-sm rounded-xl px-4 py-3 ${notice.tone === 'success' ? 'bg-success-soft text-success' : 'bg-danger-soft text-danger'}`}>
+          {notice.text}
+        </p>
+      )}
+
+      <div className="flex flex-col sm:flex-row gap-3">
+        <label className="relative flex-1">
+          <span className="sr-only">Search accounts</span>
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" aria-hidden="true" />
+          <TextInput type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name, username or login" className="pl-9" />
+        </label>
+        <label className="sm:w-52">
+          <span className="sr-only">Filter by status</span>
+          <select value={status} onChange={(e) => setStatus(e.target.value as AccountStatus | '')} className="w-full h-10 rounded-xl border border-line bg-surface text-fg text-sm px-3">
+            {STATUS_FILTERS.map((f) => (
+              <option key={f.value} value={f.value}>{f.label}</option>
+            ))}
+          </select>
+        </label>
       </div>
 
-      {/* Users Table */}
-      <div className="flex-1 bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm flex flex-col">
-        <div className="overflow-x-auto flex-1">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-gray-200 bg-gray-50">
-                <th className="px-6 py-4 text-xs font-semibold text-gray-700 uppercase tracking-wider">User Profile</th>
-                <th className="px-6 py-4 text-xs font-semibold text-gray-700 uppercase tracking-wider">Contact</th>
-                <th className="px-6 py-4 text-xs font-semibold text-gray-700 uppercase tracking-wider">Role</th>
-                <th className="px-6 py-4 text-xs font-semibold text-gray-700 uppercase tracking-wider">Presence</th>
-                <th className="px-6 py-4 text-xs font-semibold text-gray-700 uppercase tracking-wider">Account Status</th>
-                <th className="px-6 py-4 text-xs font-semibold text-gray-700 uppercase tracking-wider text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {loading ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center">
-                    <div className="flex items-center justify-center gap-2">
-                      <div className="w-2 h-2 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <div className="w-2 h-2 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <div className="w-2 h-2 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                      <span className="text-gray-600 font-medium text-sm ml-2">Scanning Database...</span>
-                    </div>
-                  </td>
-                </tr>
-              ) : filteredUsers.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-gray-600 font-medium text-sm uppercase tracking-wider">
-                    No Users Found
-                  </td>
-                </tr>
-              ) : (
-                filteredUsers.map((u) => {
-                  const { statusText, statusColor, emoji } = getStatusDisplay(u.id);
-                  const isSelf = u.id === currentUser?.id;
-                  const isMenuOpen = openMenuId === u.id;
-
-                  return (
-                    <tr key={u.id} className="hover:bg-violet-50/40 transition-colors group">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-violet-500 to-violet-700 border border-violet-300 flex items-center justify-center text-white font-bold uppercase shrink-0 shadow-sm">
-                            {u.username?.[0] || <UserIcon size={18} />}
-                          </div>
-                          <div>
-                            <div className="text-sm font-semibold text-gray-900">{u.username} {isSelf && <span className="text-violet-500 font-medium">(You)</span>}</div>
-                            <div className="text-xs font-mono text-gray-400">ID: {u.id.substring(0, 8)}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-2 text-sm text-gray-700 font-medium">
-                          <Mail size={14} className="text-gray-400" />
-                          {u.email}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        {u.role === 'ADMIN' ? (
-                          <span className="px-3 py-1 rounded-md bg-purple-100 border border-purple-200 text-purple-700 text-[10px] font-bold uppercase tracking-wider flex items-center gap-1 w-fit">
-                            <ShieldCheck size={11} /> Admin
-                          </span>
-                        ) : (
-                          <span className="px-3 py-1 rounded-md bg-gray-100 border border-gray-200 text-gray-700 text-[10px] font-bold uppercase tracking-wider w-fit">Member</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`px-3 py-1 rounded-md border text-[10px] font-bold uppercase tracking-wider flex items-center gap-2 w-fit ${statusColor}`}>
-                          <span>{emoji}</span>
-                          {statusText}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4">
-                        <span className={`px-3 py-1 rounded-md border text-[10px] font-bold uppercase tracking-wider w-fit inline-block ${STATUS_BADGE_STYLES[u.status]}`}>
-                          {u.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        {isSelf ? (
-                          <span className="text-xs text-gray-300 font-bold uppercase tracking-wider">—</span>
-                        ) : (
-                          <div className="relative inline-block text-left" ref={isMenuOpen ? menuContainerRef : undefined}>
-                            <button
-                              onClick={() => setOpenMenuId(isMenuOpen ? null : u.id)}
-                              disabled={busyId === u.id}
-                              className="p-2.5 text-gray-500 hover:text-violet-600 hover:bg-violet-50 rounded-lg transition-all disabled:opacity-50"
-                            >
-                              <MoreVertical size={16} />
-                            </button>
-
-                            {isMenuOpen && (
-                              <div className="absolute right-0 mt-1 w-56 bg-white border border-gray-200 rounded-xl shadow-xl z-20 overflow-hidden py-1.5 animate-in fade-in zoom-in-95 duration-150">
-                                <button
-                                  onClick={() => handleToggleRole(u)}
-                                  className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-violet-50 hover:text-violet-700 transition-colors"
-                                >
-                                  <ShieldCheck size={15} />
-                                  {u.role === 'ADMIN' ? 'Demote to Member' : 'Promote to Admin'}
-                                </button>
-
-                                {u.status === 'ACTIVE' ? (
-                                  <>
-                                    <button
-                                      onClick={() => handleSetStatus(u, 'SUSPENDED')}
-                                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-amber-700 hover:bg-amber-50 transition-colors"
-                                    >
-                                      <UserMinus size={15} />
-                                      Suspend User
-                                    </button>
-                                    <button
-                                      onClick={() => handleSetStatus(u, 'BANNED')}
-                                      className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-red-700 hover:bg-red-50 transition-colors"
-                                    >
-                                      <Ban size={15} />
-                                      Ban User
-                                    </button>
-                                  </>
-                                ) : (
-                                  <button
-                                    onClick={() => handleSetStatus(u, 'ACTIVE')}
-                                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-green-700 hover:bg-green-50 transition-colors"
-                                  >
-                                    <RotateCcw size={15} />
-                                    Reactivate User
-                                  </button>
-                                )}
-
-                                <button
-                                  onClick={() => handleForceReset(u)}
-                                  className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-violet-50 hover:text-violet-700 transition-colors"
-                                >
-                                  <KeyRound size={15} />
-                                  Force Password Reset
-                                </button>
-
-                                <div className="my-1.5 border-t border-gray-100" />
-
-                                <button
-                                  onClick={() => handleDeleteUser(u)}
-                                  className="w-full flex items-center gap-2.5 px-4 py-2.5 text-sm font-medium text-red-700 hover:bg-red-50 transition-colors"
-                                >
-                                  <Trash2 size={15} />
-                                  Delete User
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Footer */}
-        <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 text-xs font-medium text-gray-700 uppercase tracking-wider flex justify-between items-center">
-          <div>
-            <span className="text-violet-600 font-bold">●</span> Total: {filteredUsers.length} | Showing {filteredUsers.length} of {users.length}
+      <section className="bg-surface border border-line rounded-2xl shadow-sm overflow-hidden" aria-label="Accounts">
+        <div className="px-4 py-3 border-b border-line text-xs font-semibold text-fg-subtle uppercase tracking-wider">{summary}</div>
+        {loadError ? (
+          <ErrorState message={loadError} onRetry={() => load(false)} />
+        ) : loading && users.length === 0 ? (
+          <LoadingState label="Loading accounts" />
+        ) : users.length === 0 ? (
+          <EmptyState
+            icon={<Users size={24} />}
+            title={query || status ? 'No matching accounts' : 'No accounts yet'}
+            description={query || status ? 'Try a different search or filter.' : 'Create the first account to get started.'}
+          />
+        ) : (
+          <ul className="divide-y divide-line">
+            {users.map((u) => {
+              const isSelf = u.id === currentUser?.id;
+              const presence = presenceOf(u.id);
+              return (
+                <li key={u.id} className="flex items-center gap-3 px-4 py-3 hover:bg-surface-secondary transition-colors">
+                  <div className="relative shrink-0">
+                    <div className="w-10 h-10 rounded-xl bg-brand-muted text-brand font-bold flex items-center justify-center" aria-hidden="true">{initials(u)}</div>
+                    <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full ring-2 ring-surface ${presence.dot}`} title={presence.label} />
+                  </div>
+                  <button type="button" onClick={() => setViewing(u.id)} className="min-w-0 flex-1 text-left rounded-lg">
+                    <span className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-semibold text-fg truncate">{u.displayName || u.username}</span>
+                      {u.displayName && <span className="text-xs text-fg-subtle">@{u.username}</span>}
+                      {isSelf && <Badge tone="brand">You</Badge>}
+                      {u.role === 'ADMIN' && <Badge tone="brand"><ShieldCheck size={10} aria-hidden="true" /> Admin</Badge>}
+                    </span>
+                    <span className="block text-xs text-fg-muted truncate">
+                      {u.loginId} · {u.workspaceCount} workspace{u.workspaceCount === 1 ? '' : 's'} · joined {formatDate(u.createdAt)}
+                    </span>
+                  </button>
+                  <Badge tone={STATUS_TONE[u.status]} className="hidden sm:inline-flex">{u.status}</Badge>
+                  {isSelf ? (
+                    <span className="w-8" aria-hidden="true" />
+                  ) : (
+                    <Menu
+                      label={`Actions for ${u.username}`}
+                      items={menuFor(u)}
+                      trigger={<MoreVertical size={16} aria-hidden="true" />}
+                      align="right"
+                      triggerClassName={`p-2 rounded-lg text-fg-muted hover:text-fg hover:bg-surface-tertiary ${busyId === u.id ? 'opacity-50 pointer-events-none' : ''}`}
+                    />
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {nextCursor && !loadError && (
+          <div className="p-3 border-t border-line flex justify-center">
+            <Button variant="secondary" size="sm" loading={loadingMore} onClick={() => load(true, nextCursor)}>Load more</Button>
           </div>
-          <span className="text-gray-600">Encrypted Connection Active</span>
-        </div>
-      </div>
+        )}
+      </section>
 
+      {creating && (
+        <CreateUserModal
+          onClose={() => setCreating(false)}
+          onCreated={(user) => {
+            setCreating(false);
+            flash('success', `${user.username} was created and can sign in now.`);
+            load(false);
+          }}
+        />
+      )}
+      {viewing && <UserDetailsModal userId={viewing} onClose={() => setViewing(null)} onChanged={() => load(false)} />}
+      {dialog}
     </div>
   );
 };

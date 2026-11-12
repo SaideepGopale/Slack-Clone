@@ -1,7 +1,17 @@
 import crypto from 'crypto';
 import { prisma } from './lib/prisma';
 
-const JWT_SECRET = 'dev_secret_for_local';
+// Stage 1B (T.30): local development utility. It derives the OTP key the
+// running local server uses, so it needs that server's JWT_SECRET from the
+// environment — there is no built-in value. The two disposable test accounts
+// get random per-run passwords, which are never printed.
+const refuse = (reason: string): never => {
+  console.error(`Refusing to run: ${reason}`);
+  process.exit(1);
+};
+if (process.env.NODE_ENV === 'production') refuse('local development utility only (NODE_ENV=production).');
+const JWT_SECRET = process.env.JWT_SECRET || refuse('set JWT_SECRET to the local backend\'s value (it is never printed).');
+const disposablePassword = () => `${crypto.randomBytes(18).toString('base64url')}-Aa1!`;
 const otpKey = () => `${JWT_SECRET}:otp`;
 const hashOtp = (code: string) => crypto.createHmac('sha256', otpKey()).update(code).digest('hex');
 
@@ -29,8 +39,8 @@ async function signupUser(email: string, username: string, password: string) {
 
 async function main() {
   const ts = Date.now();
-  const a = await signupUser(`dmA${ts}@example.com`, `dmA${ts}`, 'DmTest123!');
-  const b = await signupUser(`dmB${ts}@example.com`, `dmB${ts}`, 'DmTest123!');
+  const a = await signupUser(`dmA${ts}@example.com`, `dmA${ts}`, disposablePassword());
+  const b = await signupUser(`dmB${ts}@example.com`, `dmB${ts}`, disposablePassword());
   console.log('EMAIL_A=dmA' + ts + '@example.com');
   console.log('EMAIL_B=dmB' + ts + '@example.com');
   console.log('USERNAME_B=' + b.user.username);

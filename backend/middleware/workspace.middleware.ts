@@ -1,10 +1,12 @@
 import { Response, NextFunction } from 'express';
-import { WorkspaceRole } from '@prisma/client';
-import { prisma } from '../lib/prisma';
+import { HttpError } from '../lib/httpError';
+import { canWorkspace, loadWorkspaceActor, WorkspaceActor } from '../lib/policy';
 import { AuthenticatedRequest } from './auth.middleware';
 
 export interface WorkspaceScopedRequest extends AuthenticatedRequest {
-  workspaceMembership?: { id: string; role: WorkspaceRole };
+  // Batch 3/E: the caller's resolved roles (lib/policy), for handlers that
+  // need more than "may enter".
+  workspaceActor?: WorkspaceActor;
 }
 
 /**
@@ -13,44 +15,41 @@ export interface WorkspaceScopedRequest extends AuthenticatedRequest {
  * GET /api/workspaces/:workspaceId/channels), falling back to
  * `req.body.workspaceId` (body-based routes, e.g. POST /api/channels).
  *
- * The Default Workspace (`isDefault: true`) is granted immediately, with no
- * WorkspaceMember lookup at all — it's meant to be reachable by every
- * authenticated user (Rule 2), including one that has never been explicitly
- * added as a member there. Every other (private) workspace falls through to
- * the real membership check: `req.user.id` must have a WorkspaceMember row,
- * same as before. Either way, a handler behind this middleware can trust the
- * caller is allowed into the workspace without re-deriving that itself.
- * `req.workspaceMembership` is only ever populated in the private-workspace
- * branch — nothing downstream currently reads it, but a real membership row
- * simply doesn't exist to attach in the Default Workspace case.
+ * Batch 3/E: decided by lib/policy 'workspace.view' (the same rule every
+ * other module uses) instead of an inline WorkspaceMember lookup. Behaviour
+ * is unchanged: a member (or the owner) passes; the Default Workspace
+ * (`isDefault: true`) is open to every authenticated account, which
+ * loadWorkspaceActor resolves as an implicit MEMBER (Rule 2). Organization
+ * managers who aren't members do NOT pass — this gate guards content routes;
+ * management routes call the policy directly.
  */
 export const requireWorkspaceAccess = async (req: WorkspaceScopedRequest, res: Response, next: NextFunction) => {
+  // Fails closed via next(err) instead of leaving the request hanging —
+  // Express 4 does not catch rejected promises from async middleware.
+  try {
+    await checkWorkspaceAccess(req, res, next);
+  } catch (err) {
+    next(err);
+  }
+};
+
+const checkWorkspaceAccess = async (req: WorkspaceScopedRequest, res: Response, next: NextFunction) => {
   const workspaceId = req.params.workspaceId || req.body?.workspaceId;
   if (!workspaceId || typeof workspaceId !== 'string') {
     return res.status(400).json({ error: 'workspaceId is required' });
   }
 
-  const workspace = await prisma.workspace.findUnique({
-    where: { id: workspaceId },
-    select: { isDefault: true },
-  });
-  if (!workspace) {
-    return res.status(404).json({ error: 'Workspace not found' });
+  let actor: WorkspaceActor;
+  try {
+    actor = await loadWorkspaceActor(req.user!.id, workspaceId);
+  } catch (err) {
+    if (err instanceof HttpError && err.status === 404) return res.status(404).json({ error: 'Workspace not found' });
+    throw err;
   }
-
-  if (workspace.isDefault) {
-    return next();
-  }
-
-  const membership = await prisma.workspaceMember.findUnique({
-    where: { userId_workspaceId: { userId: req.user!.id, workspaceId } },
-    select: { id: true, role: true },
-  });
-
-  if (!membership) {
+  if (!canWorkspace(actor, 'workspace.view')) {
     return res.status(403).json({ error: 'You are not a member of this workspace.' });
   }
 
-  req.workspaceMembership = membership;
+  req.workspaceActor = actor;
   next();
 };
