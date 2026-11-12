@@ -67,7 +67,9 @@ interface World {
 let w: World;
 
 const ok = <T>(res: request.Response, status: number) => {
-  expect(res.status, `${res.req?.method} ${res.req?.path} → ${JSON.stringify(res.body)}`).toBe(status);
+  // `req` exists at runtime on supertest responses but is not in its typings.
+  const sent = (res as request.Response & { req?: { method?: string; path?: string } }).req;
+  expect(res.status, `${sent?.method} ${sent?.path} → ${JSON.stringify(res.body)}`).toBe(status);
   return res.body as T;
 };
 
@@ -306,7 +308,8 @@ describe('email invitations', () => {
     const banned = w.users.banned;
     const forBanned = await invite(wsAdmin, w.ws1, `${Math.random().toString(36).slice(2)}@example.com`);
     await prisma.invitation.update({ where: { id: forBanned.id }, data: { email: banned.user.email.toLowerCase() } });
-    expect((await api(banned).post(`/api/invitations/accept/${forBanned.token}`)).status).toBe(403);
+    // T.32 (audit H1): a banned account's session no longer authenticates at all (401, was 403 from the accept rule).
+    expect((await api(banned).post(`/api/invitations/accept/${forBanned.token}`)).status).toBe(401);
     expect(await prisma.workspaceMember.count({ where: { workspaceId: w.ws1, userId: invitee.user.id } })).toBe(0);
   });
 
@@ -373,7 +376,8 @@ describe('invite links and join requests', () => {
   it('banned accounts cannot request or be approved; a request belongs to one workspace; concurrent decisions resolve once', async () => {
     const { wsAdmin, orgOwner, banned } = w.users;
     const token = await linkToken(wsAdmin, w.ws1);
-    expect((await api(banned).post('/api/workspaces/join', { token })).status).toBe(403);
+    // T.32 (audit H1): refused at authentication now (401), before the join rule (was 403).
+    expect((await api(banned).post('/api/workspaces/join', { token })).status).toBe(401);
 
     const later = await createAndLoginUser();
     ok(await api(later).post('/api/workspaces/join', { token }), 200);
@@ -426,6 +430,7 @@ describe('socket matrix', () => {
     void removed;
 
     // Banned accounts can't open a socket at all (frozen handshake, verified only).
-    await expect(harness.connect(banned)).rejects.toThrow(/suspended/i);
+    // T.32: the handshake now names the actual status ("banned"), not always "suspended".
+    await expect(harness.connect(banned)).rejects.toThrow(/banned/i);
   });
 });

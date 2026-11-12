@@ -1,4 +1,4 @@
-import rateLimit from 'express-rate-limit';
+import { createLimiter } from './limiter';
 
 // Originally scoped narrowly to the two OTP sign-up endpoints; loginLimiter
 // below closes the most urgent of the other pre-existing gaps (an
@@ -15,7 +15,7 @@ const skipInTests = () => process.env.NODE_ENV === 'test';
 
 // Signup-request sends a real email per call — the abuse case is either
 // spamming someone else's inbox or burning through email-provider quota.
-export const signupRequestLimiter = rateLimit({
+export const signupRequestLimiter = createLimiter('signup-request', {
   windowMs: 15 * 60 * 1000,
   limit: 5,
   standardHeaders: true,
@@ -29,7 +29,7 @@ export const signupRequestLimiter = rateLimit({
 // workspace/channel joins) — separate limiter/counter from
 // signupRequestLimiter so usage of one path can't exhaust the other's budget
 // for the same IP.
-export const directSignupLimiter = rateLimit({
+export const directSignupLimiter = createLimiter('signup', {
   windowMs: 15 * 60 * 1000,
   limit: 10,
   standardHeaders: true,
@@ -43,7 +43,7 @@ export const directSignupLimiter = rateLimit({
 // caps the *rate* of verification attempts across codes too, so someone
 // can't cycle through signup-request -> verify-otp in a tight loop to get
 // effectively unlimited guesses.
-export const verifyOtpLimiter = rateLimit({
+export const verifyOtpLimiter = createLimiter('verify-otp', {
   windowMs: 15 * 60 * 1000,
   limit: 15,
   standardHeaders: true,
@@ -57,11 +57,46 @@ export const verifyOtpLimiter = rateLimit({
 // brute-forcing a password at any real speed is no longer possible. Keyed on
 // IP (the default), not email, so this can't be used to lock a specific
 // victim's account out by deliberately failing their login repeatedly.
-export const loginLimiter = rateLimit({
+export const loginLimiter = createLimiter('login', {
   windowMs: 15 * 60 * 1000,
   limit: 10,
   standardHeaders: true,
   legacyHeaders: false,
   skip: skipInTests,
   message: { error: 'Too many login attempts. Please try again later.' },
+});
+
+// T.32 (audit M1): the public password-reset endpoints were unthrottled — an
+// open door for e-mail bombing (and burning Resend quota) and for guessing.
+// Per IP, like the limiters above; exported counts are used by the tests.
+export const FORGOT_PASSWORD_LIMIT = 5;
+export const forgotPasswordLimiter = createLimiter('forgot-password', {
+  windowMs: 15 * 60 * 1000,
+  limit: FORGOT_PASSWORD_LIMIT,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTests,
+  message: { error: 'Too many password reset requests. Please try again later.' },
+});
+
+export const RESET_PASSWORD_LIMIT = 10;
+export const resetPasswordLimiter = createLimiter('reset-password', {
+  windowMs: 15 * 60 * 1000,
+  limit: RESET_PASSWORD_LIMIT,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTests,
+  message: { error: 'Too many password reset attempts. Please try again later.' },
+});
+
+// T.32 (audit L3): the public invitation lookup returns the invitee's
+// address to whoever holds the token — throttled against token guessing.
+export const INVITATION_LOOKUP_LIMIT = 30;
+export const invitationLookupLimiter = createLimiter('invitation-lookup', {
+  windowMs: 60 * 1000,
+  limit: INVITATION_LOOKUP_LIMIT,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: skipInTests,
+  message: { error: 'Too many requests. Please try again later.' },
 });

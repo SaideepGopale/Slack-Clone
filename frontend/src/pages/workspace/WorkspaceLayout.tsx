@@ -1,5 +1,7 @@
+import { LoadingScreen } from '../../components/ui/LoadingScreen';
 import axios from 'axios';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ErrorBoundary } from '../../components/ui/ErrorBoundary';
 import { toast } from 'react-toastify';
 import { Navigate, Outlet, useLocation, useMatch, useNavigate, useParams } from 'react-router-dom';
 import { CallOverlay, IncomingCallBanner } from '../../components/chat/CallOverlay';
@@ -15,25 +17,13 @@ import { applyIncomingMessage, applyReadState, ReadStateMap, toReadStateMap, unr
 import { Channel, ReadState, User } from '../../types';
 import { findConversation, WorkspaceContext, WorkspaceContextValue } from './WorkspaceContext';
 import { useWorkspaceLiveUpdates, useWorkspaces } from './WorkspacesProvider';
+import { CommandPalette } from '../../components/palette/CommandPalette';
+import { CallLobby } from '../../components/chat/CallLobby';
+import { MobileTabBar } from '../../components/mobile/MobileTabBar';
+import { useAppHeight } from '../../hooks/useAppHeight';
+import { isTabletWidth } from '../../hooks/useMediaQuery';
+import type { CallMediaChoice } from '../../components/chat/CallOverlay';
 
-const LoadingScreen = () => (
-  <div className="h-screen w-screen flex flex-col items-center justify-center bg-gradient-to-br from-white via-gray-50 to-blue-50 dark:from-[#111215] dark:via-[#1A1D21] dark:to-[#0f1419] transition-colors">
-    <div className="relative">
-      <div className="w-20 h-20 bg-gradient-to-br from-blue-600 to-purple-600 rounded-2xl flex items-center justify-center text-white font-black text-3xl shadow-2xl mb-6 animate-pulse">
-        S
-      </div>
-      <div className="absolute -inset-2 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl blur-xl opacity-30 animate-pulse"></div>
-    </div>
-    <div className="flex flex-col items-center gap-3">
-      <p className="text-gray-600 dark:text-gray-400 font-bold text-base tracking-wide">Loading Workspace...</p>
-      <div className="flex gap-1.5">
-        <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-        <div className="w-2 h-2 bg-purple-600 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-        <div className="w-2 h-2 bg-pink-600 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-      </div>
-    </div>
-  </div>
-);
 
 // The 5 sidebar nav items live at their own routes; anything else (a channel
 // or DM at /:workspaceId/c/:id) maps to the 'chat' sentinel so none of them
@@ -46,8 +36,12 @@ const activeViewFromPath = (pathname: string, workspaceId: string) => {
   if (rest.startsWith('/activity')) return 'activity';
   if (rest.startsWith('/directory')) return 'directory';
   if (rest.startsWith('/more')) return 'more';
-  // F1 route shells (F2/F3): no sidebar item is highlighted for them yet.
-  if (rest.startsWith('/settings') || rest.startsWith('/organization') || rest.startsWith('/projects')) return 'other';
+  if (rest.startsWith('/projects')) return 'projects';
+  if (rest.startsWith('/tasks')) return 'tasks';
+  if (rest.startsWith('/team-tasks')) return 'team-tasks';
+  if (rest.startsWith('/chats')) return 'chats';
+  if (rest.startsWith('/calls')) return 'calls';
+  if (rest.startsWith('/settings') || rest.startsWith('/organization')) return 'other';
   return 'chat';
 };
 
@@ -115,10 +109,39 @@ export const WorkspaceLayout = () => {
   // (it used to total every unread message, which is what channel badges show).
   const [activityUnread, setActivityUnread] = useState(0);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  // T.39: tablets (768–1023px) can hide the sidebar for a full-width view; remembered per device.
+  const [tabletSidebarHidden, setTabletSidebarHidden] = useState(() => {
+    try {
+      return localStorage.getItem('smartconnect:tablet-sidebar') === 'hidden';
+    } catch {
+      return false;
+    }
+  });
+  const toggleTabletSidebar = () =>
+    setTabletSidebarHidden((hidden) => {
+      try {
+        localStorage.setItem('smartconnect:tablet-sidebar', hidden ? 'shown' : 'hidden');
+      } catch {
+        // storage unavailable: the choice lasts for this page only
+      }
+      return !hidden;
+    });
+  // T.39: the shell follows the visible viewport (on-screen keyboards) below the desktop breakpoint.
+  useAppHeight();
+  // T.39: screens without the header's menu button (the phone's Chats tab) open the navigation drawer.
+  useEffect(() => {
+    const open = () => {
+      setIsSidebarOpen(true);
+      setTabletSidebarHidden(false);
+    };
+    window.addEventListener('smartconnect:open-navigation', open);
+    return () => window.removeEventListener('smartconnect:open-navigation', open);
+  }, []);
   const [incomingCall, setIncomingCall] = useState<IncomingCall | null>(null);
   // `outgoing`: this user started the call (rang the conversation), so ending
   // it also cancels the ring and a timeout/decline ends it (P2 Phase H).
-  const [activeCall, setActiveCall] = useState<{ channelId: string; callType: 'audio' | 'video'; outgoing?: boolean } | null>(null);
+  // T.33: a call opens in the pre-join lobby (stage 'lobby'), then goes live.
+  const [activeCall, setActiveCall] = useState<{ channelId: string; callType: 'audio' | 'video'; outgoing?: boolean; stage: 'lobby' | 'live'; media?: CallMediaChoice } | null>(null);
   const activeCallRef = useRef(activeCall);
 
   const currentChannelId = channelMatch?.params.channelId;
@@ -127,16 +150,22 @@ export const WorkspaceLayout = () => {
     activeCallRef.current = activeCall;
   }, [activeCall]);
 
+  // T.32 (audit FE-6): responses for a workspace the user has already left
+  // (fast switching) are ignored instead of overwriting the current lists.
+  const currentWorkspaceRef = useRef(workspaceId);
+  currentWorkspaceRef.current = workspaceId;
   const fetchChannels = useCallback((onComplete?: (chans: Channel[]) => void) => {
     if (!token || !workspaceId) return;
     const forWorkspace = workspaceId;
     axios.get<Channel[]>(`/api/workspaces/${workspaceId}/channels`)
       .then(res => {
+        if (currentWorkspaceRef.current !== forWorkspace) return;
         setChannels(res.data);
         setChannelsFor(forWorkspace);
         onComplete?.(res.data);
       })
       .catch(err => {
+        if (currentWorkspaceRef.current !== forWorkspace) return;
         console.error('fetchChannels error:', err);
         // Still resolve onComplete on failure — callers (notably the
         // channelsLoading reset below) need to know the fetch settled one
@@ -154,9 +183,12 @@ export const WorkspaceLayout = () => {
     if (!token || !workspaceId) return;
     const forWorkspace = workspaceId;
     axios.get<Channel[]>(`/api/workspaces/${workspaceId}/dms`)
-      .then(res => setDMs(res.data))
+      .then(res => {
+        if (currentWorkspaceRef.current === forWorkspace) setDMs(res.data);
+      })
       .catch(err => console.error('fetchDMs error:', err))
       .finally(() => {
+        if (currentWorkspaceRef.current !== forWorkspace) return;
         setDMsFor(forWorkspace);
         setDMsLoading(false);
       });
@@ -190,9 +222,17 @@ export const WorkspaceLayout = () => {
 
   // FA-RT-02: the server derives the caller's name from the authenticated
   // socket, so only the channel and call type are sent.
+  // T.33: ringing starts when the caller leaves the lobby (joinActiveCall).
   const startCall = useCallback((channelId: string, callType: 'audio' | 'video') => {
-    setActiveCall({ channelId, callType, outgoing: true });
-    socket?.emit('call:initiate', { channelId, callType });
+    setActiveCall({ channelId, callType, outgoing: true, stage: 'lobby' });
+  }, []);
+
+  const joinActiveCall = useCallback((media: CallMediaChoice) => {
+    setActiveCall((current) => {
+      if (!current || current.stage !== 'lobby') return current;
+      if (current.outgoing) socket?.emit('call:initiate', { channelId: current.channelId, callType: current.callType });
+      return { ...current, stage: 'live', media };
+    });
   }, [socket]);
 
   // Properly tears down a call rather than just clearing local state — tells
@@ -202,11 +242,14 @@ export const WorkspaceLayout = () => {
   // WorkspaceSwitcher when a workspace switch requires ending the call first.
   const endActiveCall = useCallback(() => {
     setActiveCall((current) => {
-      if (current) {
+      if (current?.stage === 'live') {
         socket?.emit('webrtc:leave', { channelId: current.channelId });
         // Stop ringing everyone else (the server ignores this if the ring
         // already ended or wasn't ours).
         if (current.outgoing) socket?.emit('call:cancel', { channelId: current.channelId });
+      } else if (current && !current.outgoing) {
+        // Answered, then backed out of the lobby: that is a decline.
+        socket?.emit('call:decline', { channelId: current.channelId });
       }
       return null;
     });
@@ -225,6 +268,11 @@ export const WorkspaceLayout = () => {
       if (call?.outgoing && call.channelId === ended.channelId && (ended.reason === 'timeout' || ended.reason === 'declined')) {
         if (ended.reason === 'timeout') toast.info('No one answered the call.');
         endActiveCall();
+      }
+      // T.33: the caller hung up while this person was still in the lobby.
+      if (call && !call.outgoing && call.stage === 'lobby' && call.channelId === ended.channelId && (ended.reason === 'cancelled' || ended.reason === 'timeout')) {
+        toast.info('The call ended before you joined.');
+        setActiveCall(null);
       }
     };
     const onDeclined = (data: unknown) => {
@@ -303,7 +351,7 @@ export const WorkspaceLayout = () => {
     fetchDMs();
     fetchReadState();
     if (token) {
-      axios.get<User[]>('/api/users').then(res => setUsers(res.data));
+      axios.get<User[]>('/api/users').then(res => setUsers(res.data)).catch(() => undefined); // T.32: a failed directory load must not surface as an unhandled rejection
     }
   }, [token, fetchChannels, fetchDMs, fetchReadState]);
 
@@ -581,16 +629,19 @@ export const WorkspaceLayout = () => {
 
   const currentChannel = findConversation(channels, dms, currentChannelId);
   const activeView = activeViewFromPath(location.pathname, workspaceId);
+  // T.39: a conversation fills a phone's screen (no app header, no tab bar).
+  const isConversation = location.pathname.startsWith(`/${workspaceId}/c/`);
+  const chatsUnread = [...channels, ...dms].reduce((sum, c) => sum + (unreadCounts[c.id] ?? 0), 0);
 
   return (
     <WorkspaceContext.Provider value={contextValue}>
-      <div className="flex flex-col h-screen w-screen overflow-hidden bg-gradient-to-br from-gray-50 via-white to-gray-100 dark:bg-[#1A1D21] transition-all duration-300 text-gray-900 dark:text-gray-100 font-sans">
+      <div className="flex h-screen w-screen flex-col overflow-hidden bg-sidebar font-sans text-fg max-lg:h-[var(--app-height,100dvh)]">
         {incomingCall && (
           <IncomingCallBanner
             callerName={incomingCall.callerName}
             callType={incomingCall.callType}
             onAccept={() => {
-              setActiveCall({ channelId: incomingCall.channelId, callType: incomingCall.callType, outgoing: false });
+              setActiveCall({ channelId: incomingCall.channelId, callType: incomingCall.callType, outgoing: false, stage: 'lobby' });
               setIncomingCall(null);
             }}
             onDecline={() => {
@@ -600,18 +651,34 @@ export const WorkspaceLayout = () => {
           />
         )}
 
-        {activeCall && (
+        {activeCall?.stage === 'lobby' && (
+          <CallLobby
+            callType={activeCall.callType}
+            title={`${activeCall.callType === 'video' ? 'Video' : 'Audio'} call · ${findConversation(channels, dms, activeCall.channelId)?.name ?? 'conversation'}`}
+            joinLabel={activeCall.outgoing ? 'Start call' : 'Join call'}
+            onJoin={joinActiveCall}
+            onCancel={endActiveCall}
+          />
+        )}
+
+        {activeCall?.stage === 'live' && (
           <CallOverlay
             channelId={activeCall.channelId}
             callType={activeCall.callType}
             socket={socket}
             onEndCall={endActiveCall}
             workspaceId={workspaceId}
+            initialMedia={activeCall.media}
           />
         )}
 
+        {/* T.33: ⌘K command palette — search and jump anywhere in the workspace. */}
+        {workspaceId && <CommandPalette workspaceId={workspaceId} onMessagePerson={startDM} />}
+
         <Header
-          onMenuClick={() => setIsSidebarOpen(!isSidebarOpen)}
+          onMenuClick={() => (isTabletWidth() ? toggleTabletSidebar() : setIsSidebarOpen(!isSidebarOpen))}
+          hideOnPhone={isConversation}
+          sidebarHidden={tabletSidebarHidden}
           searchScope={currentChannel ? { id: currentChannel.id, name: currentChannel.name, isDM: !!currentChannel.isDM } : null}
         />
 
@@ -642,10 +709,11 @@ export const WorkspaceLayout = () => {
           {/* P3: on phones the workspace rail lives in the navigation drawer with
               the sidebar instead of permanently taking 68px of the screen. */}
           <div className={`
-            fixed md:relative top-12 bottom-0 md:top-auto md:bottom-auto left-0 z-50 md:z-0 flex
+            fixed md:relative top-[calc(3rem+env(safe-area-inset-top))] bottom-0 md:top-auto md:bottom-auto left-0 z-50 md:z-0 flex
+            ${isConversation ? 'max-md:top-0' : ''} ${tabletSidebarHidden ? 'md:max-lg:hidden' : ''}
             transition-transform duration-300 ease-out
             ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-            w-[min(348px,calc(100vw-48px))] md:w-auto bg-slack-sidebar shadow-2xl md:shadow-none
+            w-[min(348px,calc(100vw-48px))] md:w-auto bg-sidebar ${isSidebarOpen ? 'shadow-2xl' : 'shadow-none'} md:shadow-none
           `}>
             <WorkspaceSwitcher />
             <div className="flex-1 min-w-0 md:flex-none md:w-60 lg:w-64 xl:w-72">
@@ -671,13 +739,52 @@ export const WorkspaceLayout = () => {
             </div>
           </div>
 
-          <main className="flex-1 flex flex-col overflow-hidden bg-white dark:bg-[#111215] md:rounded-tl-3xl shadow-professional-xl dark:shadow-[-10px_0_30px_rgba(0,0,0,0.5)] relative z-10 transition-all duration-300 border-l border-gray-200 dark:border-gray-800">
-            <Outlet />
+          <main className="relative z-10 flex flex-1 min-w-0 flex-col overflow-hidden bg-surface md:rounded-tl-xl md:border-l md:border-t border-line">
+            {/* T.32: a page chunk loading or failing stays inside the content area —
+                the sidebar, header and any live call are unaffected. */}
+            <ErrorBoundary region="this page" resetKey={location.pathname}>
+              <Suspense fallback={<PageSkeleton />}>
+                <Outlet />
+              </Suspense>
+            </ErrorBoundary>
           </main>
         </div>
+        {/* T.39: the phone tab bar (hidden on tablets/desktop by its own md:hidden). */}
+        {!isConversation && (
+          <MobileTabBar
+            activeView={activeView}
+            chatsUnread={chatsUnread}
+            activityUnread={activityUnread}
+            onNavigate={(view) => {
+              setIsSidebarOpen(false);
+              navigate(`/${workspaceId}/${view}`);
+            }}
+          />
+        )}
       </div>
     </WorkspaceContext.Provider>
   );
 };
 
+/** Content-area placeholder while a page chunk loads (layout-matched, no spinner). */
+const PageSkeleton = () => (
+  <div className="flex h-full flex-col" role="status" aria-label="Loading">
+    <div className="flex h-14 items-center gap-3 border-b border-line px-5">
+      <div className="skeleton h-4 w-40 rounded-md" />
+    </div>
+    <div className="flex-1 space-y-5 p-5">
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} className="flex gap-3">
+          <div className="skeleton h-9 w-9 shrink-0 rounded-lg" />
+          <div className="flex-1 space-y-2">
+            <div className="skeleton h-3 w-32 rounded" />
+            <div className="skeleton h-3 rounded" style={{ width: `${70 - i * 12}%` }} />
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+// Kept for existing imports; the screen itself lives in components/ui (T.32).
 export { LoadingScreen };

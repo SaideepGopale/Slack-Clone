@@ -20,6 +20,14 @@ if (typeof window !== 'undefined') {
   });
 }
 
+// T.39: the installable-app service worker (static files only — public/sw.js).
+// Production builds only, so the development server's modules are never cached.
+if (import.meta.env.PROD && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+  });
+}
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />

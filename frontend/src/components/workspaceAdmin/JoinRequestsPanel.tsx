@@ -66,7 +66,7 @@ export const JoinRequestsPanel = ({ workspaceId, showEmails = true, onCountChang
       {list.map((req) => (
         <li key={req.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3 min-w-0">
-            <div aria-hidden="true" className="w-8 h-8 rounded-full bg-brand-soft text-brand flex items-center justify-center font-black text-xs shrink-0">
+            <div aria-hidden="true" className="w-8 h-8 rounded-full bg-brand-soft text-brand flex items-center justify-center font-semibold text-xs shrink-0">
               {req.user.username.slice(0, 1).toUpperCase()}
             </div>
             <div className="min-w-0">

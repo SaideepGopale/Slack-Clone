@@ -73,6 +73,17 @@ describe('typed API layer', () => {
     expect(await invitationsApi.listJoinRequests('ws')).toEqual([{ id: 'r1', createdAt: 'now', user: { id: 'u1', username: 'uma', email: 'u@x.test' } }]);
   });
 
+  // T.36: with no e-mail provider the server saves the invitation but sends
+  // nothing; the caller must not be told it was sent.
+  it('reports an invitation saved without any e-mail as not sent, and why', async () => {
+    api.post.mockResolvedValue({
+      data: { success: true, emailSent: false, emailUnavailable: true, message: 'Invitation saved, but no e-mail was sent.', token: 'tok-SECRET', id: 'i3' },
+    });
+    const saved = await invitationsApi.inviteByEmail('ws', 'c@x.test');
+    expect(saved).toEqual({ id: 'i3', emailSent: false, emailUnavailable: true });
+    expect(JSON.stringify(saved)).not.toMatch(/tok-SECRET/);
+  });
+
   it('maps organization and member pages, and encodes path segments', async () => {
     api.get.mockResolvedValue({ data: { members: [{ id: 'u1' }], nextCursor: 'c2' } });
     await expect(organizationsApi.listOrganizationMembers('o/1', { q: 'ann', cursor: 'c1' })).resolves.toEqual({ items: [{ id: 'u1' }], nextCursor: 'c2' });

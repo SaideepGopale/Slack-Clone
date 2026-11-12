@@ -3,7 +3,7 @@ import { userIdsByEmail } from '../../lib/identity';
 import { isUuid } from '../../lib/messageInput';
 import { prisma } from '../../lib/prisma';
 import { ChannelAccess } from '../../sockets/channelAccess';
-import { getPresenceInWorkspace } from '../../sockets/presence.handlers';
+import { getPresenceInWorkspace, getPresenceMapInWorkspace } from '../../sockets/presence.handlers';
 import {
   assertCanHoldElevatedRole,
   assertWorkspace,
@@ -84,6 +84,7 @@ export const listMembers = async (
   ]);
 
   const page = rows.slice(0, take);
+  const presence = await getPresenceMapInWorkspace(page.map((m) => m.user.id), workspaceId);
   return {
     members: page.map((m) => ({
       id: m.user.id,
@@ -94,7 +95,7 @@ export const listMembers = async (
       role: m.role,
       isOwner: workspace?.ownerId === m.user.id,
       joinedAt: m.createdAt,
-      presence: getPresenceInWorkspace(m.user.id, workspaceId),
+      presence: presence.get(m.user.id) ?? null,
     })),
     nextCursor: rows.length > take ? page[page.length - 1].id : null,
   };
@@ -138,7 +139,7 @@ export const getMemberProfile = async (viewer: DirectoryViewer, workspaceId: str
     title: profile?.title ?? null,
     bio: profile?.bio ?? null,
     timezone: profile?.timezone ?? null,
-    presence: getPresenceInWorkspace(userId, workspaceId),
+    presence: await getPresenceInWorkspace(userId, workspaceId),
     sharedChannels,
   };
 };
@@ -223,7 +224,7 @@ export const addWorkspaceMember = async (actorId: string, workspaceId: string, u
       role: 'MEMBER' as const,
       isOwner: false,
       joinedAt,
-      presence: getPresenceInWorkspace(target.id, workspaceId),
+      presence: await getPresenceInWorkspace(target.id, workspaceId),
     },
   };
 };

@@ -5,7 +5,6 @@ import {
   ArrowDown,
   Copy,
   BarChart2, // 👇 NAYA: Polls ke liye icon
-  Download,
   FileText,
   MessageSquare,
   Mic,
@@ -15,7 +14,6 @@ import {
   Plus,
   Reply, Send, Smile,
   SmilePlus,
-  Square,
   CheckCheck,
   Info,
   LogOut,
@@ -27,7 +25,8 @@ import {
   Megaphone,
   MoreHorizontal,
   Settings,
-  Archive
+  Archive,
+  Hash
 } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -40,20 +39,18 @@ import { useWorkspace } from '../../pages/workspace/WorkspaceContext';
 import { seenBy, seenLabel, upsertReceipt } from '../../lib/receipts';
 import { isLaterPosition } from '../../lib/unread';
 import { ConversationDetailsModal } from '../conversations/ConversationDetailsModal';
-import {
-  createClientId,
-  DeliveryState,
-  extractUrls,
-  htmlToText,
-  isPending,
-  mergeMessages,
-  PENDING_PREFIX,
-  truncate,
-  upsertMessage,
-} from '../../lib/messages';
+import { createClientId, DeliveryState, extractUrls, htmlToText, isPending, mergeMessages, PENDING_PREFIX, truncate, upsertMessage, reconcileLatestWindow } from '../../lib/messages';
 import { sanitizeMessageHtml } from '../../lib/sanitizeHtml';
-import { clearDraft, isPreviewableImage, layoutMessages, loadDraft, saveDraft } from '../../lib/chatPresentation';
-import { Menu, MenuItem, useConfirm } from '../ui';
+import { clearDraft, layoutMessages, loadDraft, saveDraft } from '../../lib/chatPresentation';
+import { MessageAttachment } from './MessageAttachment';
+import { UploadedVoiceNote, VoiceRecorderBar } from './voice/VoiceRecorderBar';
+import { AttachmentTray } from './upload/AttachmentTray';
+import { useUploadQueue } from './upload/useUploadQueue';
+import { Avatar } from '../ui/Avatar';
+import { BottomSheet, Menu, MenuItem, SheetAction, useConfirm } from '../ui';
+import { Camera, ChevronLeft, ImagePlus, Paperclip, PinOff, Type } from 'lucide-react';
+import { COARSE_POINTER_QUERY, PHONE_QUERY, useMediaQuery } from '../../hooks/useMediaQuery';
+import { useLongPress } from '../../hooks/useLongPress';
 import { EmojiPicker } from '../ui/EmojiPicker';
 import { fetchMentionCandidates } from '../../lib/mentionCandidates';
 import { createTypingTracker } from '../../lib/typingTracker';
@@ -114,10 +111,10 @@ const HEADER_BUTTON =
   'items-center justify-center gap-2 h-9 min-w-9 @lg:h-10 @lg:min-w-10 px-2 @3xl:px-3 rounded-lg bg-gray-100 text-gray-700 text-sm font-semibold hover:bg-gray-200 hover:text-gray-900 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus';
 // P3: composer tool buttons (attach, emoji, voice).
 const COMPOSER_BUTTON =
-  'p-2 @lg:p-2.5 rounded-lg text-gray-500 hover:text-gray-800 hover:bg-white transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus';
+  'p-1.5 rounded-md text-fg-subtle hover:text-fg hover:bg-surface-tertiary transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus';
 // P3: one style for every message action (hover toolbar).
 const ACTION_BUTTON =
-  'p-1.5 @lg:p-2 rounded-md text-fg-muted hover:text-fg hover:bg-surface-tertiary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus';
+  'p-1.5 rounded-md text-fg-muted hover:text-fg hover:bg-surface-tertiary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-focus';
 const TYPING_THROTTLE_MS = 2_000;
 
 const withReactions = (m: ChatMessage): ChatMessage => ({ ...m, reactions: m.reactions ?? [] });
@@ -181,20 +178,19 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [reactingToId, setReactingToId] = useState<string | null>(null);
+  // T.39: touch layouts — press-and-hold a message for its actions, the "+" sheet, and the formatting toggle.
+  const isPhone = useMediaQuery(PHONE_QUERY);
+  const isTouch = useMediaQuery(COARSE_POINTER_QUERY);
+  const [actionSheet, setActionSheet] = useState<{ message: ChatMessage; isThreadView: boolean } | null>(null);
+  const [attachSheetOpen, setAttachSheetOpen] = useState(false);
+  const [formattingOpen, setFormattingOpen] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const messageLongPress = useLongPress<{ message: ChatMessage; isThreadView: boolean }>((target) => setActionSheet(target));
   
-  const [fileData, setFileData] = useState<FileData | null>(null);
-  // Captured client-side from the raw File at selection time — the backend's
-  // upload response doesn't include size, and there's no need to add it
-  // there just to render a preview badge.
-  const [fileSize, setFileSize] = useState<number | null>(null);
-  // Discriminated rather than a bare boolean — the two upload paths
-  // (file-picker attachment vs. recorded voice note) share this same loading
-  // UI, and previously shared a single `uploading` boolean too, which is
-  // exactly why a regular file upload showed a hardcoded "Uploading
-  // audio..." label: there was no way for the UI to tell which kind of
-  // upload was actually in flight.
-  const [uploadingType, setUploadingType] = useState<'audio' | 'file' | null>(null);
-  const [uploadProgress, setUploadProgress] = useState(0);
+  // T.33: several attachments per send (picker, paste, drag-and-drop), each
+  // with its own progress, cancel and retry (components/chat/upload).
+  const uploads = useUploadQueue({ onRejected: (message) => setError(message) });
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
@@ -221,10 +217,8 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
   const [loadingMore, setLoadingMore] = useState(false);
   const nextCursorRef = useRef<string | null>(null);
 
-  const [isRecording, setIsRecording] = useState(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
+  // T.33: the voice-note recorder (components/chat/voice) is open in the composer.
+  const [voiceOpen, setVoiceOpen] = useState(false);
 
   useEffect(() => {
     setTypingUsers([]);
@@ -286,16 +280,23 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
 
     // Runs after every reconnect once the server has restored subscriptions:
     // fetch whatever arrived while this client was offline.
+    // T.32 (audit RT-5): the latest page is re-read and reconciled, so edits,
+    // deletions, reactions and pins made while this client was offline show
+    // up too — not only messages that are new.
     const backfill = async () => {
       if (!loadedRef.current) return;
       const confirmed = messagesRef.current.filter(m => !isPending(m) && belongsHere(m));
       const last = confirmed[confirmed.length - 1];
       try {
         if (!last) return await fetchLatest(true);
-        const res = await axios.get<MessagePageResponse>(`/api/channels/${channelId}/messages`, { params: { after: last.id } });
+        const res = await axios.get<MessagePageResponse>(`/api/channels/${channelId}/messages`);
         if (cancelled) return;
-        if (res.data.hasMore) return await fetchLatest(true);
-        setMessages(prev => mergeMessages(prev, res.data.messages.map(withReactions)));
+        const page = res.data.messages.map(withReactions);
+        // The page does not reach back to what we already had: the gap is
+        // bigger than one page, so start from the latest page instead.
+        const reachesBack = page.some(m => m.id === last.id) || page.some(m => new Date(m.createdAt) <= new Date(last.createdAt));
+        if (res.data.hasMore && !reachesBack) return await fetchLatest(true);
+        setMessages(prev => reconcileLatestWindow(prev.filter(belongsHere), page));
       } catch (err) {
         // e.g. the anchor message was deleted while we were offline
         console.warn('Backfill failed, reloading latest messages:', err);
@@ -493,7 +494,12 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
     const html = mainEditorRef.current?.getHTML() ?? '';
     const text = mainEditorRef.current?.getText() ?? '';
 
-    if (!text.trim() && !fileData) return;
+    const files = uploads.ready;
+    if (!text.trim() && files.length === 0) return;
+    if (uploads.busy) {
+      setError('Wait for your files to finish uploading, or remove them.');
+      return;
+    }
 
     setSending(true);
     setError(null);
@@ -521,19 +527,26 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
     }
     // 👆 END SLASH COMMAND DETECTOR 👆
 
-    sendMessage({
-      content: finalContent,
-      fileUrl: fileData?.url,
-      fileName: fileData?.name,
-      fileType: fileData?.type,
-      pollData, // Payload mein poll pass kar diya
-    });
+    // T.33: the text goes with the first file; each further file is its own
+    // message (one attachment per message), in the order they were added.
+    const [first, ...rest] = pollData ? [undefined, ...files] : files;
+    if (text.trim() || first) {
+      sendMessage({
+        content: finalContent,
+        fileUrl: first?.url,
+        fileName: first?.name,
+        fileType: first?.type,
+        pollData, // Payload mein poll pass kar diya
+      });
+    }
+    for (const file of rest) {
+      if (file) sendMessage({ content: '', fileUrl: file.url, fileName: file.name, fileType: file.type });
+    }
 
     mainEditorRef.current?.clear();
     clearDraft(user?.id, channel.id);
     setContent('');
-    setFileData(null);
-    setFileSize(null);
+    uploads.clear();
     // Without this, selecting the exact same file again right after sending
     // silently does nothing — the input's value never changed, so the
     // browser never fires onChange a second time.
@@ -551,82 +564,20 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
     });
   };
 
-  // Strictly the voice-note upload path — the file-picker attachment path
-  // below (handleFileUpload) is a separate function entirely; the two were
-  // never actually cross-wired, but they used to share one `uploading`
-  // boolean, which is what made a regular file upload show "Uploading
-  // audio..." regardless of which one was actually running.
-  const sendVoiceNote = async (audioBlob: Blob) => {
-    const formData = new FormData();
-    // Field name 'attachment' must match upload.middleware.ts's
-    // upload.single('attachment') exactly — a mismatch here silently fails
-    // with "Unexpected field" instead of a helpful error. Passing the
-    // filename as the explicit 3rd argument (rather than wrapping in a File
-    // first) means the recorded Blob always carries a real name + extension
-    // to the server, even though MediaRecorder blobs themselves have none.
-    formData.append('attachment', audioBlob, `voice-${Date.now()}.webm`);
-
-    try {
-      setUploadingType('audio');
-      const res = await axios.post<FileData>('/api/upload', formData, {
-        onUploadProgress: (pe) => setUploadProgress(Math.round((pe.loaded * 100) / (pe.total ?? 1))),
-      });
-
-      sendMessage({
-        content: '🎙️ Voice Note',
-        fileUrl: res.data.url,
-        fileName: res.data.name || 'voice.webm',
-        fileType: res.data.type || 'audio/webm',
-      });
-    } catch (err: any) {
-      console.error('Audio Upload Error:', err);
-      setError(err.response?.data?.message || 'Failed to send voice note.');
-    } finally {
-      setUploadingType(null);
-      setUploadProgress(0);
-    }
+  // T.33: a recorded, uploaded voice note becomes a message through the
+  // normal send path (optimistic, retried, idempotent on clientId).
+  const sendVoiceMessage = (note: UploadedVoiceNote) => {
+    sendMessage({ content: '🎙️ Voice Note', fileUrl: note.url, fileName: note.name || 'voice-message.webm', fileType: note.type || 'audio/webm' });
   };
 
-  const startRecording = async () => {
-    try {
-      setError(null);
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        streamRef.current?.getTracks().forEach(track => track.stop());
-
-        if (audioBlob.size === 0) {
-          setError('Voice recording failed. Please try again.');
-          return;
-        }
-
-        sendVoiceNote(audioBlob);
-      };
-
-      mediaRecorder.start(200);
-      setIsRecording(true);
-    } catch (err) {
-      console.error('Error accessing mic:', err);
-      setError('Microphone access denied! Allow permissions in your browser.');
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-    }
-  };
+  // T.32 (audit FE-12): leaving the conversation mid-recording releases the
+  // microphone and discards the unfinished note (never sent to the wrong
+  // conversation) — T.33: closing the recorder unmounts it, which does that —
+  // and a pending "stopped typing" timer is cancelled too.
+  useEffect(() => () => {
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    setVoiceOpen(false);
+  }, [channel.id]);
 
   // Edit and pin update optimistically and roll back if the server rejects.
   const handleEdit = () => {
@@ -694,64 +645,17 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
     try {
       await axios.post(`/api/messages/${messageId}/reactions`, { emoji });
     } catch (err) {
-      console.error('Failed to toggle reaction:', err);
+      // T.32 (audit FE-4): a refused reaction is explained, not swallowed.
+      setError((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Your reaction could not be saved. Please try again.');
     }
   };
 
-  // Strictly the file-picker attachment path — separate from sendVoiceNote
-  // above. This one stages the upload result into `fileData` rather than
-  // sending immediately: the user still has to hit Send, matching the
-  // existing "attach, preview, then send" flow (handleSend reads fileData).
+  // T.33: picker, paste and drop all feed the upload queue.
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) void uploadFile(file);
-  };
-
-  // P2: shared by the file picker, pasted files and drag-and-drop.
-  const uploadFile = async (file: File) => {
-    if (uploadingType) return;
-    if (file.size > 25 * 1024 * 1024) {
-      setError('File size must be under 25MB');
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
-    const formData = new FormData();
-    // Exact field name expected by upload.middleware.ts's upload.single('attachment').
-    formData.append('attachment', file);
-    try {
-      setUploadingType('file');
-      const res = await axios.post<FileData>('/api/upload', formData, {
-        onUploadProgress: (pe) => setUploadProgress(Math.round((pe.loaded * 100) / (pe.total ?? 1))),
-      });
-      setFileData(res.data);
-      setFileSize(file.size);
-    } catch (err: any) {
-      console.error('File upload error:', err);
-      setError(err.response?.data?.message || 'Upload failed. Please try again.');
-      // Reset the input so the user can immediately retry selecting the same
-      // file after a transient failure — browsers don't fire onChange again
-      // if the input's value hasn't changed.
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    } finally {
-      setUploadingType(null);
-      setUploadProgress(0);
-    }
-  };
-
-  // Clears the staged attachment — used by both the preview badge's remove
-  // button and after a successful send. Resetting the input's own value is
-  // what makes re-selecting the exact same file work: without it, the
-  // browser won't fire onChange a second time for an unchanged file path.
-  const handleRemoveFile = () => {
-    setFileData(null);
-    setFileSize(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-  };
-
-  const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    const files = Array.from(e.target.files ?? []);
+    if (files.length) uploads.add(files);
+    // Lets the same file be picked again later.
+    e.target.value = '';
   };
 
   // `channel` is a required prop (ChannelPage only renders ChatArea with a
@@ -972,6 +876,11 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
 
   const composer = composerState(channel.isDM ? null : channelDetails);
   const caps = channelDetails?.capabilities;
+  // T.32 (audit FE-4): archived conversations are read-only on the server —
+  // the UI no longer offers writes that would only fail.
+  const readOnly = !channel.isDM && !!channelDetails?.archived;
+  const canReactHere = channel.isDM || caps?.canReact !== false;
+  const canReplyHere = channel.isDM || caps?.canReply !== false;
 
   const leaveChannel = async () => {
     const ok = await confirm({
@@ -1004,31 +913,39 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
     const isPoll = Boolean(m.pollData); // Check if this is a poll message
 
     return (
-      <div key={m.id} data-message-id={m.id} className={`group flex gap-3 @lg:gap-4 hover:bg-gray-50/70 rounded-xl ${grouped ? 'px-3 py-0.5 @lg:px-5' : 'px-3 pt-2.5 pb-1.5 @lg:px-5 @lg:pt-3'} transition-colors relative ${m.isPinned ? 'bg-amber-50/30 border border-amber-100/50' : ''} ${m.deliveryState === 'pending' ? 'opacity-60' : ''} ${!isThreadView && highlightedId === m.id ? 'ring-2 ring-brand bg-brand-soft' : ''} animate-fade-in`}>
-        
+      // T.32 (audit FE-3): each message is reachable by keyboard (Tab), which
+      // also reveals its action bar (focus-within). Only messages that just
+      // arrived animate in — history does not replay animations on scroll.
+      <div
+        key={m.id}
+        data-message-id={m.id}
+        role="article"
+        tabIndex={isPending(m) ? -1 : 0}
+        {...(isPending(m) ? {} : messageLongPress({ message: m, isThreadView }))}
+        aria-label={`${m.sender?.username ?? 'Someone'}, ${format(new Date(m.createdAt), 'h:mm a')}`}
+        className={`max-md:select-none max-md:[-webkit-touch-callout:none] group relative flex gap-3 rounded-lg outline-none transition-colors hover:bg-surface-secondary focus-visible:bg-surface-secondary focus-visible:ring-2 focus-visible:ring-focus ${grouped ? 'px-3 py-0.5 @lg:px-5' : 'px-3 pt-2 pb-1 @lg:px-5 @lg:pt-2.5'} ${m.isPinned && !isThreadView ? 'bg-warning-soft/50 shadow-[inset_2px_0_0_var(--color-warning)]' : ''} ${m.deliveryState === 'pending' ? 'opacity-60' : ''} ${!isThreadView && highlightedId === m.id ? 'ring-2 ring-brand bg-brand-soft' : ''} ${Date.now() - new Date(m.createdAt).getTime() < 8000 ? 'animate-message-in' : ''}`}
+      >
         {m.isPinned && !isThreadView && (
-          <div className="absolute -top-2 left-10 bg-gradient-to-r from-amber-100 to-yellow-100 text-amber-700 text-[10px] px-2.5 py-1 rounded-full font-bold flex items-center gap-1.5 border border-amber-200 shadow-sm z-10">
-            <Pin size={10} /> Pinned
+          <div className="absolute -top-2 left-12 z-10 flex items-center gap-1 rounded-full border border-warning/25 bg-surface px-2 py-0.5 text-[10px] font-semibold text-warning">
+            <Pin size={10} aria-hidden="true" /> Pinned
           </div>
         )}
 
         {grouped ? (
           // Same author moments later: no repeated avatar/name, just the time on hover.
-          <div className="w-9 @lg:w-11 shrink-0 pt-1 text-right text-[10px] font-medium text-fg-subtle opacity-0 group-hover:opacity-100" aria-hidden="true">
+          <div className="w-9 shrink-0 pt-1 text-right text-[10px] font-medium tabular-nums text-fg-subtle opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" aria-hidden="true">
             {format(new Date(m.createdAt), 'h:mm')}
           </div>
         ) : (
-        <div className="w-9 h-9 @lg:w-11 @lg:h-11 rounded-lg bg-gradient-to-br from-violet-500 to-violet-700 text-white flex items-center justify-center font-bold uppercase shadow-sm shrink-0 text-sm @lg:text-base" aria-hidden="true">
-          {m.sender?.username?.[0]}
-        </div>
+          <Avatar name={m.sender?.username} size="md" className="mt-0.5" />
         )}
         <div className="flex-1 min-w-0 relative">
           {grouped ? (
             <span className="sr-only">{m.sender?.username} at {format(new Date(m.createdAt), 'h:mm a')}</span>
           ) : (
           <div className="flex items-baseline gap-2 min-w-0">
-            <span className="font-bold text-fg text-[15px] truncate min-w-0">{m.sender?.username}</span>
-            <time dateTime={m.createdAt} title={format(new Date(m.createdAt), 'PPpp')} className="text-xs text-fg-subtle font-medium shrink-0">{format(new Date(m.createdAt), 'h:mm a')}</time>
+            <span className="font-semibold text-fg text-[14px] truncate min-w-0">{m.sender?.username}</span>
+            <time dateTime={m.createdAt} title={format(new Date(m.createdAt), 'PPpp')} className="text-xs text-fg-subtle tabular-nums shrink-0">{format(new Date(m.createdAt), 'h:mm a')}</time>
           </div>
           )}
           
@@ -1046,7 +963,7 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
               <div className="flex gap-2 mt-3">
                 <button 
                   onClick={handleEdit} 
-                  className="px-5 py-2 bg-gradient-to-r from-violet-600 to-violet-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-violet-600/30 hover:from-violet-700 hover:to-violet-800 transition-all hover:scale-105 active:scale-95"
+                  className="px-4 py-1.5 bg-brand hover:bg-brand-hover text-on-brand rounded-lg text-sm font-semibold transition-colors active:scale-95"
                 >
                   Save Changes
                 </button>
@@ -1132,65 +1049,13 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
           )}
 
           {isAudioMsg ? (
-            <div className="mt-3 bg-violet-50 p-4 rounded-lg w-fit min-w-[300px] shadow-sm border border-violet-100">
-              <div className="text-sm font-bold text-violet-700 mb-3 flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center">
-                  <Mic size={16} />
-                </div>
-                Voice Message
-              </div>
-              {m.fileUrl ? (
-                <div className="flex flex-col gap-2">
-                  <audio 
-                    controls 
-                    src={m.fileUrl} 
-                    style={{ width: '270px', height: '42px', display: 'block' }}
-                    className="rounded-lg"
-                  />
-                  <a 
-                    href={m.fileUrl} 
-                    target="_blank" 
-                    rel="noreferrer" 
-                    className="text-[11px] text-violet-600 hover:text-violet-700 underline font-medium"
-                  >
-                    Open in new tab
-                  </a>
-                </div>
-              ) : (
-                <span className="text-xs text-red-500 font-semibold">Audio missing.</span>
-              )}
-            </div>
-          ) : m.fileUrl && isPreviewableImage(m.fileType, m.fileUrl) ? (
-            <a href={m.fileUrl} target="_blank" rel="noreferrer noopener" className="mt-3 block w-fit max-w-full" title={`Open ${m.fileName ?? 'image'}`}>
-              <img
-                src={m.fileUrl}
-                alt={m.fileName ?? 'Shared image'}
-                loading="lazy"
-                className="max-h-80 max-w-full sm:max-w-md rounded-lg border border-line object-contain bg-surface-secondary"
-              />
-            </a>
+            m.fileUrl ? (
+              <MessageAttachment fileUrl={m.fileUrl} fileName={m.fileName} fileType={m.fileType} audio />
+            ) : (
+              <span className="mt-2 block text-xs font-semibold text-danger">Audio missing.</span>
+            )
           ) : m.fileUrl ? (
-            <div className="mt-2 max-w-md border border-border-subtle rounded-lg p-3 @lg:p-4 flex items-center justify-between gap-3 bg-surface-secondary hover:border-violet-300 transition-colors group/file">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-10 h-10 rounded-lg bg-violet-100 flex items-center justify-center shrink-0" aria-hidden="true">
-                  <FileText size={20} className="text-violet-600" />
-                </div>
-                <div className="min-w-0">
-                  <div className="font-bold text-gray-900 text-sm truncate">{m.fileName}</div>
-                  <div className="text-xs text-gray-500 mt-1 font-medium truncate">{m.fileType}</div>
-                </div>
-              </div>
-              <a
-                href={m.fileUrl}
-                target="_blank"
-                rel="noreferrer noopener"
-                aria-label={`Download ${m.fileName ?? 'file'}`}
-                title={`Download ${m.fileName ?? 'file'}`}
-                className="p-3 hover:bg-violet-50 rounded-xl transition-colors text-violet-600"
-              >
-                <Download size={20} aria-hidden="true" />
-              </a>
-            </div>
+            <MessageAttachment fileUrl={m.fileUrl} fileName={m.fileName} fileType={m.fileType} />
           ) : null}
           
           {((m.reactions?.length ?? 0) > 0 || (!isThreadView && replyCount > 0)) && (
@@ -1205,14 +1070,14 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
                   title={reaction.users.map(u => u.username).join(', ')}
                   aria-label={`${reaction.emoji} ${reaction.count}: ${reactedByMe ? 'remove your reaction' : 'react'} (${reaction.users.map(u => u.username).join(', ')})`}
                   aria-pressed={reactedByMe}
-                  className={`px-2.5 py-1 rounded-full text-sm border transition-colors font-medium ${
+                  className={`inline-flex h-6 items-center gap-1 px-2 rounded-full text-[13px] border transition-colors ${
                     reactedByMe
-                      ? 'bg-violet-50 border-violet-300 hover:border-violet-400'
-                      : 'bg-white hover:bg-gray-50 border-border-subtle hover:border-violet-300'
+                      ? 'bg-brand-soft border-brand/40 hover:border-brand/70'
+                      : 'bg-surface hover:bg-surface-secondary border-line hover:border-border-strong'
                   }`}
                 >
-                  <span className="text-base">{reaction.emoji}</span>
-                  <span className={`ml-1.5 font-bold ${reactedByMe ? 'text-violet-700' : 'text-gray-700'}`}>{reaction.count}</span>
+                  <span key={`${reaction.emoji}-${reaction.count}`} className="text-[14px] leading-none animate-reaction-pop">{reaction.emoji}</span>
+                  <span className={`text-xs font-semibold tabular-nums ${reactedByMe ? 'text-brand' : 'text-fg-muted'}`}>{reaction.count}</span>
                 </button>
               );
             })}
@@ -1221,9 +1086,9 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
               <button
                 type="button"
                 onClick={() => setActiveThread(m)}
-                className="flex items-center gap-1.5 text-sm font-semibold text-violet-600 hover:text-violet-700 hover:bg-violet-50 px-3 py-1 rounded-lg transition-colors border border-violet-200 hover:border-violet-300"
+                className="flex h-6 items-center gap-1.5 text-xs font-semibold text-brand hover:bg-brand-soft px-2 rounded-md transition-colors"
               >
-                <MessageSquare size={15} aria-hidden="true" />
+                <MessageSquare size={13} aria-hidden="true" />
                 {replyCount} {replyCount === 1 ? 'reply' : 'replies'}
               </button>
             )}
@@ -1244,18 +1109,20 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
           {/* P3: message actions — a row beneath the message when the column is
               narrow (touch: tap the message), floating above it when wide. */}
           {!isPending(m) && (
-          <div role="toolbar" aria-label="Message actions" className="mt-1.5 w-fit @lg:mt-0 @lg:absolute @lg:-right-1 @lg:-top-6 hidden group-hover:flex group-focus-within:flex items-center gap-0.5 bg-surface border border-line rounded-lg shadow-lg p-0.5 z-10 animate-scale-in">
-            <button
-              type="button"
-              onClick={() => setReactingToId(reactingToId === m.id ? null : m.id)}
-              className={ACTION_BUTTON}
-              title="Add reaction"
-              aria-label="Add reaction"
-            >
-              <SmilePlus size={17} aria-hidden="true" />
-            </button>
+          <div role="toolbar" aria-label="Message actions" className="mt-1.5 w-fit @lg:mt-0 @lg:absolute @lg:-right-1 @lg:-top-5 hidden group-hover:flex group-focus-within:flex items-center gap-0.5 bg-surface border border-line rounded-lg shadow-md p-0.5 z-10 animate-pop-in">
+            {canReactHere && (
+              <button
+                type="button"
+                onClick={() => setReactingToId(reactingToId === m.id ? null : m.id)}
+                className={ACTION_BUTTON}
+                title="Add reaction"
+                aria-label="Add reaction"
+              >
+                <SmilePlus size={16} aria-hidden="true" />
+              </button>
+            )}
           
-            {!isThreadView && (
+            {!isThreadView && !readOnly && (
               <button
                 type="button"
                 onClick={() => handlePin(m.id, !!m.isPinned)}
@@ -1267,7 +1134,7 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
               </button>
             )}
 
-            {!isThreadView && (
+            {!isThreadView && (canReplyHere || replyCount > 0) && (
               <button
                 type="button"
                 onClick={() => setActiveThread(m)}
@@ -1284,7 +1151,7 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
                 hiding these for a non-owner here isn't the real security
                 boundary, it just avoids showing a button that would otherwise
                 do nothing with no feedback when clicked. */}
-            {!isPoll && m.senderId === user?.id && (
+            {!isPoll && !readOnly && m.senderId === user?.id && (
               <button
                 type="button"
                 onClick={() => setEditingId(m.id)}
@@ -1306,7 +1173,7 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
                 <Copy size={17} aria-hidden="true" />
               </button>
             )}
-            {m.senderId === user?.id && (
+            {!readOnly && m.senderId === user?.id && (
               <button
                 type="button"
                 onClick={() => void requestDelete(m.id)}
@@ -1326,16 +1193,30 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
   };
 
   return (
-    <div className="@container/chat flex h-full bg-gradient-to-br from-white to-gray-50 relative w-full overflow-hidden" onClick={() => setReactingToId(null)}>
+    <div className="@container/chat flex h-full bg-surface relative w-full overflow-hidden" onClick={() => setReactingToId(null)}>
       <div className={`@container flex flex-col h-full min-w-0 flex-1 ${activeThread ? 'border-r border-border-subtle' : ''}`}>
         
-        <div className="border-b border-line bg-white px-3 @lg:px-6 flex items-center justify-between gap-3 shrink-0 h-14 @lg:h-20 shadow-sm">
-          <div className="flex items-center gap-3 @lg:gap-4 min-w-0">
-            <div className="w-9 h-9 @lg:w-10 @lg:h-10 shrink-0 rounded-lg bg-gradient-to-br from-violet-500 to-violet-700 flex items-center justify-center text-white font-bold text-base @lg:text-lg shadow-sm uppercase" aria-hidden="true">
-              {channel.isGroupDM ? <Users size={18} /> : channel.isDM ? channel.name?.[0] ?? '?' : '#'}
-            </div>
+        <div className="border-b border-line bg-surface px-3 @lg:px-5 flex items-center justify-between gap-3 shrink-0 h-14 max-md:h-[calc(3.5rem+env(safe-area-inset-top))] max-md:pt-[env(safe-area-inset-top)] max-md:pl-1.5">
+          <div className="flex items-center gap-2.5 min-w-0">
+            {/* T.39: phones show the conversation full-screen; back returns to the chat list. */}
+            <button
+              type="button"
+              onClick={() => navigate(`/${workspaceId}/chats`)}
+              className="-mr-1 flex h-10 w-9 shrink-0 items-center justify-center rounded-full text-fg active:bg-surface-tertiary md:hidden"
+              aria-label="Back to chats"
+            >
+              <ChevronLeft size={26} aria-hidden="true" />
+            </button>
+            {channel.isDM && !channel.isGroupDM ? (
+              <Avatar name={channel.name} size="sm" presence={dmPartnerOnline ? 'online' : 'offline'} />
+            ) : (
+              // T.39: phones drop the decorative channel icon (the back button and subtitle already orient).
+              <div className={`w-7 h-7 shrink-0 rounded-md bg-surface-tertiary flex items-center justify-center text-fg-muted font-semibold text-sm ${channel.isGroupDM ? '' : 'max-md:hidden'}`} aria-hidden="true">
+                {channel.isGroupDM ? <Users size={15} /> : <Hash size={15} />}
+              </div>
+            )}
             <div className="min-w-0">
-              <h2 className="font-bold text-base @lg:text-xl text-gray-900 flex items-center gap-2 min-w-0">
+              <h2 className="font-semibold text-[15px] text-fg flex items-center gap-2 min-w-0 tracking-[-0.01em]">
                 <span className="truncate">{channel.name}</span>
                 {!channel.isDM && channelDetails?.visibility === 'PRIVATE' && (
                   <Lock size={16} className="text-gray-400 shrink-0" aria-label="Private channel" />
@@ -1348,15 +1229,8 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
                     <Archive size={12} aria-hidden="true" /> Archived
                   </span>
                 )}
-                {channel.isDM && !channel.isGroupDM && (
-                  <span
-                    className={`w-2 h-2 rounded-full ${dmPartnerOnline ? 'bg-green-500' : 'bg-gray-300'}`}
-                    role="img"
-                    aria-label={dmPartnerOnline ? 'Online' : 'Offline'}
-                  />
-                )}
               </h2>
-              <p className="text-xs @lg:text-sm text-gray-500 font-medium truncate">
+              <p className="text-xs text-fg-subtle truncate">
                 {channel.isGroupDM
                   ? `${channel.participants?.length ?? 0} people`
                   : channel.isDM
@@ -1479,7 +1353,7 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
         />
 
         {pinned.length > 0 && (
-          <div className="bg-gradient-to-r from-amber-50 via-yellow-50 to-amber-50 border-b border-amber-200/50 px-3 @lg:px-6 py-2 @lg:py-3 shrink-0 flex items-center gap-3 overflow-x-auto shadow-sm z-10">
+          <div className="bg-warning-soft border-b border-amber-200/50 px-3 @lg:px-6 py-2 @lg:py-3 shrink-0 flex items-center gap-3 overflow-x-auto shadow-sm z-10">
             <div className="flex items-center gap-2 text-amber-700 font-bold text-xs uppercase tracking-wider shrink-0">
               <div className="w-6 h-6 rounded-lg bg-amber-100 flex items-center justify-center">
                 <Pin size={13} />
@@ -1505,7 +1379,7 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
         )}
 
         {error && (
-          <div role="alert" className="mx-3 @lg:mx-6 mt-3 p-3 @lg:p-4 bg-gradient-to-r from-red-50 to-pink-50 text-red-700 rounded-xl border border-red-200 text-sm flex justify-between items-center gap-3 shadow-sm animate-fade-in shrink-0">
+          <div role="alert" className="mx-3 @lg:mx-6 mt-3 p-3 @lg:p-4 bg-danger-soft text-danger rounded-xl border border-red-200 text-sm flex justify-between items-center gap-3 shadow-sm animate-fade-in shrink-0">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-red-100 flex items-center justify-center shrink-0">
                 <X size={16} className="text-red-600" />
@@ -1576,32 +1450,18 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
           )}
         </div>
 
-        {(typingUsers.length > 0 || uploadingType) && (
-          <div className="shrink-0 px-3 @lg:px-6 py-2 bg-white border-t border-border-subtle" aria-live="polite">
+        {typingUsers.length > 0 && (
+          <div className="shrink-0 px-4 @lg:px-6 pt-1 bg-surface" aria-live="polite">
             {typingUsers.length > 0 && (
-              <div className="flex items-center gap-3 text-sm text-gray-500 py-1 animate-fade-in">
-                <div className="flex gap-1">
-                  <div className="w-2 h-2 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
-                  <div className="w-2 h-2 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
-                  <div className="w-2 h-2 bg-violet-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
-                </div>
+              <div className="flex items-center gap-2 text-xs text-fg-subtle animate-fade-in">
+                <span className="flex gap-0.5" aria-hidden="true">
+                  <span className="typing-dot h-1.5 w-1.5 rounded-full bg-fg-subtle" style={{ animationDelay: '0ms' }} />
+                  <span className="typing-dot h-1.5 w-1.5 rounded-full bg-fg-subtle" style={{ animationDelay: '160ms' }} />
+                  <span className="typing-dot h-1.5 w-1.5 rounded-full bg-fg-subtle" style={{ animationDelay: '320ms' }} />
+                </span>
                 <span className="font-medium">
                   {typingUsers.join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...
                 </span>
-              </div>
-            )}
-            {uploadingType && (
-              <div className="flex items-center gap-3 text-sm bg-violet-50 text-violet-600 py-3 px-4 rounded-xl border border-violet-200 animate-fade-in shadow-sm my-1">
-                <div className="w-8 h-8 rounded-lg bg-violet-100 flex items-center justify-center shrink-0">
-                  <div className="w-4 h-4 border-2 border-violet-600 border-t-transparent rounded-full animate-spin"></div>
-                </div>
-                <div className="flex-1">
-                  <div className="font-semibold mb-1">{uploadingType === 'audio' ? 'Uploading audio...' : 'Uploading file...'}</div>
-                  <div className="w-full bg-violet-200 rounded-full h-1.5 overflow-hidden">
-                    <div className="bg-violet-600 h-full transition-all duration-300 rounded-full" style={{ width: `${uploadProgress}%` }}></div>
-                  </div>
-                </div>
-                <span className="font-bold text-sm">{uploadProgress}%</span>
               </div>
             )}
           </div>
@@ -1613,7 +1473,7 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
             {COMPOSER_NOTICES[composer.reason]}
           </div>
         ) : (
-        <div className="border-t border-border-subtle bg-gradient-to-b from-white to-gray-50 p-2 @lg:p-5 shrink-0 relative" onClick={(e) => e.stopPropagation()}>
+        <div className="bg-surface px-3 pb-3 pt-1 @lg:px-5 @lg:pb-4 shrink-0 relative max-md:px-2 max-md:pb-[max(env(safe-area-inset-bottom),0.5rem)]" onClick={(e) => e.stopPropagation()}>
           
           {showEmojiPicker && (
             <div className="absolute bottom-full left-4 mb-3 z-50 shadow-2xl rounded-xl border border-border-subtle overflow-hidden bg-white animate-scale-in">
@@ -1628,49 +1488,29 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
 
           {/* 👇 NAYA: Command Hint Box 👇 */}
           {content.startsWith('/') && !content.startsWith('/poll') && (
-            <div className="absolute bottom-full left-4 mb-2 bg-white border border-border-subtle shadow-xl rounded-xl p-3 z-50 min-w-[250px] animate-fade-in">
-              <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Slash Commands</div>
-              <div
-                className="flex items-center gap-3 p-2 hover:bg-violet-50 rounded-lg cursor-pointer transition-colors"
+            <div className="absolute bottom-full left-4 mb-2 bg-surface border border-line shadow-lg rounded-xl p-2 z-50 min-w-[250px] animate-pop-in" role="listbox" aria-label="Slash commands">
+              <div className="text-[11px] font-medium text-fg-subtle px-2 pb-1">Slash commands</div>
+              <button
+                type="button"
+                role="option"
+                aria-selected="false"
+                className="flex w-full items-center gap-3 p-2 text-left hover:bg-surface-tertiary rounded-lg transition-colors"
                 onClick={() => {
                   mainEditorRef.current?.setContent('/poll "Your Question?" "Option 1" "Option 2"');
                   mainEditorRef.current?.focus();
                 }}
               >
-                <div className="bg-violet-100 text-violet-600 p-1.5 rounded-md"><BarChart2 size={16} /></div>
-                <div>
-                  <div className="font-bold text-sm text-gray-900">/poll</div>
-                  <div className="text-xs text-gray-500">Create a live voting poll</div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* File preview badge — shown once the attachment has finished
-              uploading (fileData is populated by handleFileUpload). Lets the
-              user see what they've attached and remove it before sending. */}
-          {fileData && (
-            <div className="flex items-center gap-3 mb-2 px-4 py-2.5 bg-violet-50 border border-violet-200 rounded-xl animate-fade-in">
-              <div className="w-9 h-9 rounded-lg bg-violet-100 flex items-center justify-center text-violet-600 shrink-0">
-                <FileText size={18} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold text-gray-900 truncate">{fileData.name}</div>
-                {fileSize !== null && (
-                  <div className="text-xs text-gray-500">{formatFileSize(fileSize)}</div>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={handleRemoveFile}
-                className="p-1.5 hover:bg-violet-100 rounded-lg text-gray-500 hover:text-red-600 transition-colors shrink-0"
-                title="Remove attachment"
-                aria-label={`Remove attachment ${fileData.name}`}
-              >
-                <X size={16} aria-hidden="true" />
+                <span className="bg-brand-soft text-brand p-1.5 rounded-md" aria-hidden="true"><BarChart2 size={15} /></span>
+                <span>
+                  <span className="block font-semibold text-sm text-fg">/poll</span>
+                  <span className="block text-xs text-fg-subtle">Create a live voting poll</span>
+                </span>
               </button>
             </div>
           )}
+
+          {/* T.33: staged attachments with per-file progress, cancel and retry. */}
+          <AttachmentTray items={uploads.items} onRemove={uploads.remove} onRetry={uploads.retry} />
 
           {mentionOpen && (
             <ul
@@ -1697,9 +1537,9 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
             </ul>
           )}
           <div
-            className={`relative border rounded-lg overflow-hidden focus-within:border-brand focus-within:ring-4 focus-within:ring-brand-soft shadow-sm transition-colors bg-white ${dragActive ? 'border-brand ring-4 ring-brand-muted' : 'border-border-default'}`}
+            className={`relative border rounded-xl overflow-hidden focus-within:border-brand/60 focus-within:shadow-[0_0_0_3px_var(--color-brand-soft)] transition-[border-color,box-shadow] bg-surface ${dragActive ? 'border-brand shadow-[0_0_0_3px_var(--color-brand-muted)]' : 'border-border-default'}`}
             onDragOver={(e) => {
-              if (isRecording || !Array.from(e.dataTransfer.types).includes('Files')) return;
+              if (voiceOpen || !Array.from(e.dataTransfer.types).includes('Files')) return;
               e.preventDefault();
               setDragActive(true);
             }}
@@ -1710,8 +1550,8 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
               if (!Array.from(e.dataTransfer.types).includes('Files')) return;
               e.preventDefault();
               setDragActive(false);
-              const file = e.dataTransfer.files?.[0];
-              if (file && !isRecording) void uploadFile(file);
+              const files = Array.from(e.dataTransfer.files ?? []);
+              if (files.length && !voiceOpen) uploads.add(files);
             }}
           >
             {dragActive && (
@@ -1719,35 +1559,22 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
                 Drop to attach
               </div>
             )}
-            {isRecording ? (
-              <div className="w-full h-[88px] flex items-center justify-between px-6 bg-gradient-to-r from-red-50 to-pink-50 text-red-600 border-b-2 border-red-200">
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center animate-pulse">
-                    <Mic size={22} />
-                  </div>
-                  <div>
-                    <span className="font-bold text-base block">Recording Voice Note...</span>
-                    <span className="text-xs text-red-500 font-medium">Click stop to send</span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={stopRecording}
-                  className="p-4 bg-gradient-to-br from-red-500 to-red-600 rounded-xl hover:from-red-600 hover:to-red-700 transition-colors text-white shadow-lg shadow-red-500/30"
-                  title="Stop and send voice message"
-                  aria-label="Stop and send voice message"
-                >
-                  <Square size={18} fill="currentColor" aria-hidden="true" />
-                </button>
+            {/* T.33: voice notes record, review and send from here; the editor stays
+                mounted (hidden) so the typed draft survives. */}
+            {voiceOpen && (
+              <div className="p-2">
+                <VoiceRecorderBar onSend={sendVoiceMessage} onClose={() => setVoiceOpen(false)} />
               </div>
-            ) : (
-              <div className="w-full p-3 @lg:p-4">
+            )}
+              <div className={voiceOpen ? 'hidden' : 'w-full px-3 pt-2.5 pb-1 @lg:px-4'}>
                 <RichTextEditor
                   ref={mainEditorRef}
-                  placeholder={channel.isDM ? `Message ${channel.name}` : `Message #${channel.name} (Type '/' for commands)`}
+                  placeholder={channel.isDM ? `Message ${channel.name}` : isPhone ? `Message #${channel.name}` : `Message #${channel.name} (Type '/' for commands)`}
+                  enterSends={!(isPhone && isTouch)}
+                  formattingHiddenOnPhone={!formattingOpen}
                   initialContent={initialDraft?.html ?? ''}
                   onSubmit={() => handleSend()}
-                  onPasteFiles={(files) => void uploadFile(files[0])}
+                  onPasteFiles={(files) => uploads.add(Array.from(files))}
                   onMentionQuery={setMentionQuery}
                   onMentionKey={handleMentionKey}
                   onChangeContent={(html, text) => {
@@ -1768,17 +1595,19 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
                   }}
                 />
               </div>
-            )}
 
-            <div className="flex items-center justify-between px-2 @lg:px-4 py-2 @lg:py-3 bg-gray-50 border-t border-border-subtle">
+            <div className={voiceOpen ? 'hidden' : 'flex items-center justify-between px-2 @lg:px-3 py-1.5'}>
               <div className="flex items-center gap-1.5">
-                <input type="file" hidden ref={fileInputRef} onChange={handleFileUpload} aria-hidden="true" tabIndex={-1} />
+                <input type="file" multiple hidden ref={fileInputRef} onChange={handleFileUpload} aria-hidden="true" tabIndex={-1} />
+                {/* T.39: phone attachment sheet sources (same upload queue). */}
+                <input type="file" multiple hidden accept="image/*,video/*" ref={photoInputRef} onChange={handleFileUpload} aria-hidden="true" tabIndex={-1} />
+                <input type="file" hidden accept="image/*" capture="environment" ref={cameraInputRef} onChange={handleFileUpload} aria-hidden="true" tabIndex={-1} />
                 <button
                   type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isRecording || !!uploadingType}
+                  onClick={() => (isPhone ? setAttachSheetOpen(true) : fileInputRef.current?.click())}
+                  disabled={voiceOpen}
                   className={COMPOSER_BUTTON}
-                  title="Attach file"
+                  title="Attach files"
                   aria-label="Attach file"
                 >
                   <Plus size={20} aria-hidden="true" />
@@ -1786,7 +1615,7 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
                 <button
                   type="button"
                   onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                  disabled={isRecording}
+                  disabled={voiceOpen}
                   className={`${COMPOSER_BUTTON} ${showEmojiPicker ? '!bg-brand-soft !text-brand' : ''}`}
                   title="Add emoji"
                   aria-label="Add emoji"
@@ -1796,8 +1625,21 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
                 </button>
                 <button
                   type="button"
-                  onClick={startRecording}
-                  disabled={isRecording}
+                  onClick={() => setFormattingOpen((v) => !v)}
+                  disabled={voiceOpen}
+                  className={`${COMPOSER_BUTTON} md:hidden ${formattingOpen ? '!bg-brand-soft !text-brand' : ''}`}
+                  aria-label={formattingOpen ? 'Hide formatting' : 'Show formatting'}
+                  aria-pressed={formattingOpen}
+                >
+                  <Type size={20} aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    setVoiceOpen(true);
+                  }}
+                  disabled={voiceOpen}
                   className={COMPOSER_BUTTON}
                   title="Record voice message"
                   aria-label="Record voice message"
@@ -1808,14 +1650,15 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
               <button
                 type="button"
                 onClick={(e) => handleSend(e)}
-                disabled={(!content.trim() && !fileData) || isRecording || !!uploadingType}
-                className={`px-4 @lg:px-6 py-2 @lg:py-2.5 rounded-xl font-semibold text-sm transition-colors flex items-center gap-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${
-                  (content.trim() || fileData) && !uploadingType
-                    ? 'bg-brand hover:bg-brand-hover text-on-brand shadow-sm'
-                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                disabled={(!content.trim() && uploads.ready.length === 0) || voiceOpen || uploads.busy}
+                title="Send (Enter) · New line (Shift+Enter)"
+                className={`h-8 px-3 rounded-lg font-semibold text-[13px] transition-colors flex items-center gap-1.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus ${
+                  (content.trim() || uploads.ready.length > 0) && !uploads.busy
+                    ? 'bg-brand hover:bg-brand-hover text-on-brand'
+                    : 'bg-surface-tertiary text-fg-subtle cursor-not-allowed'
                 }`}
               >
-                <Send size={16} aria-hidden="true" />
+                <Send size={14} aria-hidden="true" />
                 Send
               </button>
             </div>
@@ -1833,6 +1676,51 @@ export const ChatArea = ({ channel, socket, onlineUsers = [], onStartCall }: Cha
           onClose={() => setActiveThread(null)}
           canReply={caps?.canReply ?? true}
         />
+      )}
+      {actionSheet && (() => {
+        const { message: am, isThreadView: inThread } = actionSheet;
+        const close = () => setActionSheet(null);
+        const own = am.senderId === user?.id;
+        const poll = Boolean(am.pollData);
+        const audio = am.content === '🎙️ Voice Note' || !!(am.fileUrl && (am.fileType?.includes('audio') || am.fileType?.includes('webm')));
+        const replies = am._count?.replies ?? 0;
+        return (
+          <BottomSheet title={`Message from ${am.sender?.username ?? 'someone'}`} onClose={close}>
+            {canReactHere && (
+              <div className="flex items-center justify-between gap-1 px-3 pb-2" role="group" aria-label="Quick reactions">
+                {['👍', '❤️', '😂', '🎉', '😮', '🙏'].map((emoji) => (
+                  <button
+                    key={emoji}
+                    type="button"
+                    onClick={() => {
+                      close();
+                      void handleReact(am.id, emoji);
+                    }}
+                    className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-secondary text-2xl active:scale-90"
+                    aria-label={`React with ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="border-t border-line py-1">
+              {!inThread && (canReplyHere || replies > 0) && <SheetAction icon={Reply} label={replies > 0 ? `Open thread (${replies})` : 'Reply in thread'} onSelect={() => { close(); setActiveThread(am); }} />}
+              {!poll && !audio && htmlToText(am.content) && <SheetAction icon={Copy} label="Copy text" onSelect={() => { close(); void copyMessageText(am); }} />}
+              {!inThread && !readOnly && <SheetAction icon={am.isPinned ? PinOff : Pin} label={am.isPinned ? 'Unpin message' : 'Pin message'} onSelect={() => { close(); handlePin(am.id, !!am.isPinned); }} />}
+              {!poll && !readOnly && own && <SheetAction icon={Pencil} label="Edit message" onSelect={() => { close(); setEditingId(am.id); }} />}
+              {!readOnly && own && <SheetAction icon={Trash2} label="Delete message" tone="danger" onSelect={() => { close(); void requestDelete(am.id); }} />}
+            </div>
+          </BottomSheet>
+        );
+      })()}
+      {attachSheetOpen && (
+        <BottomSheet title="Add to your message" onClose={() => setAttachSheetOpen(false)}>
+          <SheetAction icon={Camera} label="Take a photo" onSelect={() => { setAttachSheetOpen(false); cameraInputRef.current?.click(); }} />
+          <SheetAction icon={ImagePlus} label="Photos & videos" onSelect={() => { setAttachSheetOpen(false); photoInputRef.current?.click(); }} />
+          <SheetAction icon={Paperclip} label="File" onSelect={() => { setAttachSheetOpen(false); fileInputRef.current?.click(); }} />
+          <SheetAction icon={Mic} label="Voice message" onSelect={() => { setAttachSheetOpen(false); setError(null); setVoiceOpen(true); }} />
+        </BottomSheet>
       )}
       {confirmDialog}
     </div>

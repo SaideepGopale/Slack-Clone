@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { requireSessionUser } from '../../middleware/identity.middleware';
+import { invitationLookupLimiter } from '../../middleware/rateLimit.middleware';
 import { userRateLimit } from '../../middleware/userRateLimit.middleware';
 import {
   acceptInvitationHandler,
@@ -14,7 +15,7 @@ const inviteLimiter = userRateLimit(30, 60_000, 'Too many invitation requests. P
 
 // Public: InviteHandler.tsx checks a token before it knows whether the
 // visitor is logged in at all.
-router.get('/:token', getInvitationHandler);
+router.get('/:token', invitationLookupLimiter, getInvitationHandler);
 // Authenticated: consumes the invite for whoever is currently signed in —
 // the frontend only calls this after a real session exists (see
 // invitations.service.ts's acceptInvitation).

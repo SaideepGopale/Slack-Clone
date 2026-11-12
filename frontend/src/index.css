@@ -1,82 +1,160 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 @import "tailwindcss";
 
 /*
- * Design tokens — Tailwind v4 CSS-first config (F1, one naming system).
+ * SmartConnect design tokens — Tailwind v4 CSS-first config.
  *
- * Every variable under @theme becomes a utility (`bg-brand`, `text-fg-muted`,
- * `border-line`, …) AND a CSS custom property on :root. Utilities reference
- * the property (`background-color: var(--color-brand)`), so a future dark
- * theme only has to redefine these variables under a theme selector — no
- * component class changes (approved: light-only for now, dark-ready).
+ * T.32 (design system): one identity for the whole product. Every variable
+ * under @theme becomes a utility (`bg-brand`, `text-fg-muted`, `border-line`,
+ * `rounded-xl`, `shadow-lg`, `ease-out` …) AND a CSS custom property, so the
+ * dark theme (html.dark, below) only redefines variables.
+ *
+ * Identity: a deep teal-cyan accent (hue ≈ 190) on teal-tinted neutrals.
+ * Chosen to be distinct from the purples, indigos and blues of other team
+ * tools; contrast verified — accent-600 on white 4.9:1 (AA text), accent-400
+ * on the dark surface 7.3:1, fg-subtle 4.9:1 (light) / 5.0:1 (dark).
  *
  * Layers:
- *  1. Palette scales (violet) — raw brand colours, kept for existing classes.
- *  2. Semantic tokens (brand, fg, surface, border, status, sidebar, focus) —
- *     what new components (src/components/ui/*) use.
- *
- * The former `--color-slack-*` variables were removed: they were declared
- * outside @theme, so no `*-slack-*` utility class ever generated CSS (28
- * class usages in HomeView/Directory/ActivityView/MoreView render without
- * that colour today). Those usages are left untouched in F1 so nothing
- * changes visually; they move to semantic tokens in the F6 visual pass.
+ *  1. Accent scale (--color-accent-*). The legacy `violet-*` / `purple-*`
+ *     scales are aliases of it, so older screens that still use those class
+ *     names follow the identity without per-component edits.
+ *  2. Semantic tokens (brand, fg, surface, line, status, sidebar, focus) —
+ *     what components use.
+ *  3. Shape, depth and motion: radii, shadows, easing, durations, z-layers.
  */
 @theme {
-  /* Violet — primary brand color, 50 (lightest) to 950 (near-black) */
-  --color-violet-50: #f5f3ff;
-  --color-violet-100: #ede9fe;
-  --color-violet-200: #ddd6fe;
-  --color-violet-300: #c4b5fd;
-  --color-violet-400: #a78bfa;
-  --color-violet-500: #8b5cf6;
-  --color-violet-600: #7c3aed;
-  --color-violet-700: #6d28d9;
-  --color-violet-800: #5b21b6;
-  --color-violet-900: #4c1d95;
-  --color-violet-950: #2e1065;
+  /* 1 — Accent: SmartConnect teal, 50 (lightest) to 950 */
+  --color-accent-50: #eef9fa;
+  --color-accent-100: #d5f0f2;
+  --color-accent-200: #abe0e4;
+  --color-accent-300: #76cad1;
+  --color-accent-400: #3faeb8;
+  --color-accent-500: #1a939e;
+  --color-accent-600: #0b7c86;
+  --color-accent-700: #086a73;
+  --color-accent-800: #0a545b;
+  --color-accent-900: #0c454b;
+  --color-accent-950: #062b30;
 
-  /* Surface — backgrounds, from primary content areas to nested panels */
+  /* Legacy aliases (existing class names render in the accent). */
+  --color-violet-50: var(--color-accent-50);
+  --color-violet-100: var(--color-accent-100);
+  --color-violet-200: var(--color-accent-200);
+  --color-violet-300: var(--color-accent-300);
+  --color-violet-400: var(--color-accent-400);
+  --color-violet-500: var(--color-accent-500);
+  --color-violet-600: var(--color-accent-600);
+  --color-violet-700: var(--color-accent-700);
+  --color-violet-800: var(--color-accent-800);
+  --color-violet-900: var(--color-accent-900);
+  --color-violet-950: var(--color-accent-950);
+  --color-purple-50: var(--color-accent-50);
+  --color-purple-100: var(--color-accent-100);
+  --color-purple-200: var(--color-accent-200);
+  --color-purple-300: var(--color-accent-300);
+  --color-purple-400: var(--color-accent-400);
+  --color-purple-500: var(--color-accent-500);
+  --color-purple-600: var(--color-accent-600);
+  --color-purple-700: var(--color-accent-700);
+  --color-purple-800: var(--color-accent-800);
+  --color-purple-900: var(--color-accent-900);
+
+  /* 2 — Surfaces: primary content, app background, nested panels */
   --color-surface: #ffffff;
-  --color-surface-secondary: #fafafc;
-  --color-surface-tertiary: #f3f1f8;
+  --color-surface-secondary: #f6f8f8;
+  --color-surface-tertiary: #edf1f1;
+  --color-surface-raised: #ffffff;
 
-  /* Border — dividers, lightest to most emphasized */
-  --color-border-subtle: #ece9f4;
-  --color-border-default: #e1deec;
-  --color-border-strong: #c9c4dc;
+  /* Borders, lightest to most emphasized */
+  --color-border-subtle: #e6ebeb;
+  --color-border-default: #dbe2e2;
+  --color-border-strong: #c2cbcb;
 
-  /* ---- Semantic tokens (light theme values) ---- */
   /* Brand / primary actions */
-  --color-brand: var(--color-violet-600);
-  --color-brand-hover: var(--color-violet-700);
-  --color-brand-soft: var(--color-violet-50);
-  --color-brand-muted: var(--color-violet-100);
+  --color-brand: var(--color-accent-600);
+  --color-brand-hover: var(--color-accent-700);
+  --color-brand-soft: var(--color-accent-50);
+  --color-brand-muted: var(--color-accent-100);
   --color-on-brand: #ffffff;
-  /* Foreground (text) */
-  --color-fg: #111827;
-  --color-fg-muted: #4b5563;
-  --color-fg-subtle: #9ca3af;
-  /* Neutral lines (the app-wide default border colour) */
-  --color-line: #e5e7eb;
-  /* Status */
-  --color-danger: #dc2626;
-  --color-danger-hover: #b91c1c;
-  --color-danger-soft: #fef2f2;
-  --color-success: #059669;
-  --color-success-soft: #ecfdf5;
-  --color-warning: #b45309;
-  --color-warning-soft: #fffbeb;
-  /* Chrome */
-  --color-sidebar: var(--color-violet-950);
-  --color-focus: var(--color-violet-500);
+  /* Foreground (text): primary, secondary, tertiary */
+  --color-fg: #14191a;
+  --color-fg-muted: #465153;
+  --color-fg-subtle: #667274;
+  /* The app-wide default hairline */
+  --color-line: #e1e6e6;
+  /* Status — each its own hue family, never the accent */
+  --color-danger: #c23535;
+  --color-danger-hover: #a52a2a;
+  --color-danger-soft: #fdf0f0;
+  --color-success: #177a47;
+  --color-success-soft: #ebf7f0;
+  --color-warning: #a65a06;
+  --color-warning-soft: #fdf5e9;
+  --color-info: #2d68d6;
+  --color-info-soft: #eef3fd;
+  /* Presence */
+  --color-presence-online: #1f9d5c;
+  --color-presence-away: #c9891a;
+  /* Chrome: the workspace sidebar is deep teal-ink */
+  --color-sidebar: #0f2629;
+  --color-sidebar-hover: rgb(255 255 255 / 0.07);
+  --color-sidebar-active: rgb(63 174 184 / 0.22);
+  --color-sidebar-fg: #e3eeee;
+  --color-sidebar-fg-muted: #9db3b4;
+  --color-focus: var(--color-accent-500);
+  --color-overlay: rgb(10 18 20 / 0.45);
+
+  /* 3 — Shape: a small, consistent radius set */
+  --radius-xs: 3px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-2xl: 14px;
+  --radius-3xl: 18px;
+
+  /* Depth: hairline-first; shadows only lift floating layers */
+  --shadow-xs: 0 1px 1px rgb(16 24 26 / 0.04);
+  --shadow-sm: 0 1px 2px rgb(16 24 26 / 0.06);
+  --shadow-md: 0 2px 6px rgb(16 24 26 / 0.07), 0 1px 2px rgb(16 24 26 / 0.04);
+  --shadow-lg: 0 8px 20px rgb(16 24 26 / 0.09), 0 2px 6px rgb(16 24 26 / 0.05);
+  --shadow-xl: 0 14px 32px rgb(16 24 26 / 0.13), 0 4px 10px rgb(16 24 26 / 0.06);
+  --shadow-2xl: 0 24px 56px rgb(16 24 26 / 0.18);
+
+  /* Motion: fast, purposeful (reduced-motion handled at the bottom) */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-in: cubic-bezier(0.55, 0, 1, 0.45);
+  --default-transition-duration: 140ms;
+  --default-transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-fade-in: fade-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-pop-in: pop-in 160ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-slide-up: slide-up 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-message-in: message-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-reaction-pop: reaction-pop 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  /* T.39: mobile bottom sheets */
+  --animate-sheet-in: sheet-in 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+
+  /* Typography */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Z-index layers (used by overlays; plain properties, not utilities) */
+:root {
+  --z-sticky: 10;
+  --z-dropdown: 40;
+  --z-overlay: 50;
+  --z-modal: 60;
+  --z-call: 70;
+  --z-toast: 80;
+  --z-palette: 90;
+  --duration-fast: 100ms;
+  --duration-base: 150ms;
+  --duration-slow: 220ms;
 }
 
 @layer base {
-  :root {
-    --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-    --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
-  }
-
   body {
     font-family: var(--font-sans);
     font-size: 14px;
@@ -94,28 +172,57 @@
   }
 }
 
-/* Professional Scrollbars */
-.slack-scrollbar::-webkit-scrollbar {
+/* Scrollbars — thin, theme-aware (the `slack-scrollbar` class name is kept
+   for compatibility with existing markup). */
+.slack-scrollbar,
+.app-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(16 24 26 / 0.18) transparent;
+}
+.slack-scrollbar::-webkit-scrollbar,
+.app-scrollbar::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
-.slack-scrollbar::-webkit-scrollbar-track {
+.slack-scrollbar::-webkit-scrollbar-track,
+.app-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
-.slack-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.08);
+.slack-scrollbar::-webkit-scrollbar-thumb,
+.app-scrollbar::-webkit-scrollbar-thumb {
+  background: rgb(16 24 26 / 0.14);
   border-radius: 10px;
   border: 3px solid transparent;
   background-clip: padding-box;
 }
-.slack-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.15);
+.slack-scrollbar::-webkit-scrollbar-thumb:hover,
+.app-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgb(16 24 26 / 0.26);
   background-clip: padding-box;
 }
-.slack-scrollbar::-webkit-scrollbar-corner {
+.slack-scrollbar::-webkit-scrollbar-corner,
+.app-scrollbar::-webkit-scrollbar-corner {
   background: transparent;
 }
+html.dark .slack-scrollbar,
+html.dark .app-scrollbar {
+  scrollbar-color: rgb(255 255 255 / 0.16) transparent;
+}
+html.dark .slack-scrollbar::-webkit-scrollbar-thumb,
+html.dark .app-scrollbar::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.14);
+  background-clip: padding-box;
+}
+html.dark .slack-scrollbar::-webkit-scrollbar-thumb:hover,
+html.dark .app-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 0.26);
+  background-clip: padding-box;
+}
 
+.sidebar-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(255 255 255 / 0.16) transparent;
+}
 .sidebar-scrollbar::-webkit-scrollbar {
   width: 6px;
 }
@@ -123,11 +230,11 @@
   background: transparent;
 }
 .sidebar-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgb(255 255 255 / 0.14);
   border-radius: 10px;
 }
 .sidebar-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: rgb(255 255 255 / 0.24);
 }
 
 .no-scrollbar::-webkit-scrollbar {
@@ -138,127 +245,92 @@
   scrollbar-width: none;
 }
 
-/* Professional Shadows */
-.shadow-professional {
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
-}
+/* Legacy elevation helpers, now on the shared shadow tokens. */
+.shadow-professional { box-shadow: var(--shadow-sm); }
+.shadow-professional-lg { box-shadow: var(--shadow-lg); }
+.shadow-professional-xl { box-shadow: var(--shadow-xl); }
+.elevation-1 { box-shadow: var(--shadow-sm); }
+.elevation-2 { box-shadow: var(--shadow-md); }
+.elevation-3 { box-shadow: var(--shadow-lg); }
+.elevation-4 { box-shadow: var(--shadow-xl); }
+.elevation-5 { box-shadow: var(--shadow-2xl); }
 
-.shadow-professional-lg {
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-}
-
-.shadow-professional-xl {
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
-}
-
-/* Animations */
+/* Motion — short, ease-out, transform/opacity only (no layout shift). */
 @keyframes fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
-
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-2px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes message-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes reaction-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+/* T.39: mobile bottom sheet entrance */
+@keyframes sheet-in {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
 @keyframes slide-in-right {
-  from {
-    opacity: 0;
-    transform: translateX(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
 }
-
 @keyframes slide-in-left {
-  from {
-    opacity: 0;
-    transform: translateX(-20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
 }
-
 @keyframes scale-in {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+@keyframes typing-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.45; }
+  30% { transform: translateY(-3px); opacity: 1; }
 }
 
-@keyframes shimmer {
-  0% {
-    background-position: -1000px 0;
-  }
-  100% {
-    background-position: 1000px 0;
-  }
+.animate-slide-in-right { animation: slide-in-right 200ms var(--ease-out) both; }
+.animate-slide-in-left { animation: slide-in-left 200ms var(--ease-out) both; }
+.animate-scale-in { animation: scale-in 160ms var(--ease-out) both; }
+.animate-shimmer,
+.skeleton {
+  background-color: var(--color-surface-tertiary);
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+.typing-dot { animation: typing-dot 1.2s ease-in-out infinite; }
+@keyframes loading-bar {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(330%); }
+}
+.loading-bar { animation: loading-bar 1.1s var(--ease-in-out) infinite; }
+
+/* Theme switching: colours ease briefly instead of snapping (reduced-motion
+   collapses this like every other transition). */
+html.theme-transition,
+html.theme-transition *,
+html.theme-transition *::before,
+html.theme-transition *::after {
+  transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease, fill 200ms ease !important;
 }
 
-.animate-fade-in {
-  animation: fade-in 200ms ease-out forwards;
-}
-
-.animate-slide-in-right {
-  animation: slide-in-right 300ms ease-out forwards;
-}
-
-.animate-slide-in-left {
-  animation: slide-in-left 300ms ease-out forwards;
-}
-
-.animate-scale-in {
-  animation: scale-in 200ms ease-out forwards;
-}
-
-.animate-shimmer {
-  animation: shimmer 2s infinite linear;
-  background: linear-gradient(to right, #f6f7f8 0%, #edeef1 20%, #f6f7f8 40%, #f6f7f8 100%);
-  background-size: 1000px 100%;
-}
-
-/* Gradient backgrounds */
-.gradient-primary {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-}
-
-.gradient-success {
-  background: linear-gradient(135deg, #2bac76 0%, #1a7f5a 100%);
-}
-
-.gradient-danger {
-  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-}
-
-/* Professional elevation system */
-.elevation-1 {
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
-}
-
-.elevation-2 {
-  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.15), 0 2px 4px rgba(0, 0, 0, 0.12);
-}
-
-.elevation-3 {
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.15), 0 3px 6px rgba(0, 0, 0, 0.10);
-}
-
-.elevation-4 {
-  box-shadow: 0 15px 25px rgba(0, 0, 0, 0.15), 0 5px 10px rgba(0, 0, 0, 0.05);
-}
-
-.elevation-5 {
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+/* Keyboard focus — visible on every interactive element, never on mouse click. */
+:where(a, button, [role="button"], [role="menuitem"], [role="tab"], [role="option"], input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
 }
 
 /* ── P2: rich-text messages (composer and rendered messages share these) ── */
@@ -310,30 +382,46 @@
 
 html.dark {
   color-scheme: dark;
-  --color-surface: #17151e;
-  --color-surface-secondary: #1d1a26;
-  --color-surface-tertiary: #262230;
-  --color-border-subtle: #2b2738;
-  --color-border-default: #363146;
-  --color-border-strong: #4a4460;
-  --color-brand: var(--color-violet-500);
-  --color-brand-hover: var(--color-violet-400);
-  --color-brand-soft: rgb(139 92 246 / 0.14);
-  --color-brand-muted: rgb(139 92 246 / 0.26);
-  --color-on-brand: #ffffff;
-  --color-fg: #ece9f6;
-  --color-fg-muted: #b4aec8;
-  --color-fg-subtle: #8a839f;
-  --color-line: #2f2b3d;
-  --color-danger: #f87171;
-  --color-danger-hover: #fca5a5;
-  --color-danger-soft: rgb(248 113 113 / 0.14);
-  --color-success: #34d399;
-  --color-success-soft: rgb(52 211 153 / 0.14);
-  --color-warning: #fbbf24;
-  --color-warning-soft: rgb(251 191 36 / 0.14);
-  --color-sidebar: #110f17;
-  --color-focus: var(--color-violet-400);
+  /* Surfaces step up in lightness (elevation reads as lightness, not shadow) */
+  --color-surface: #141a1b;
+  --color-surface-secondary: #0e1213;
+  --color-surface-tertiary: #1c2324;
+  --color-surface-raised: #1b2223;
+  --color-border-subtle: #212a2c;
+  --color-border-default: #2b3537;
+  --color-border-strong: #3a4649;
+  --color-brand: var(--color-accent-400);
+  --color-brand-hover: var(--color-accent-300);
+  --color-brand-soft: rgb(63 174 184 / 0.13);
+  --color-brand-muted: rgb(63 174 184 / 0.24);
+  --color-on-brand: #06191b;
+  --color-fg: #ebefef;
+  --color-fg-muted: #a5b0b2;
+  --color-fg-subtle: #7e8b8e;
+  --color-line: #263032;
+  --color-danger: #f06b6e;
+  --color-danger-hover: #f58f91;
+  --color-danger-soft: rgb(240 107 110 / 0.13);
+  --color-success: #43d18b;
+  --color-success-soft: rgb(67 209 139 / 0.13);
+  --color-warning: #f2a93b;
+  --color-warning-soft: rgb(242 169 59 / 0.13);
+  --color-info: #7aa6ff;
+  --color-info-soft: rgb(122 166 255 / 0.13);
+  --color-presence-online: #43d18b;
+  --color-presence-away: #f2a93b;
+  --color-sidebar: #0b1112;
+  --color-sidebar-hover: rgb(255 255 255 / 0.06);
+  --color-sidebar-active: rgb(63 174 184 / 0.2);
+  --color-sidebar-fg: #dfe8e8;
+  --color-sidebar-fg-muted: #8fa3a5;
+  --color-focus: var(--color-accent-300);
+  --color-overlay: rgb(0 0 0 / 0.6);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.35);
+  --shadow-md: 0 2px 6px rgb(0 0 0 / 0.35);
+  --shadow-lg: 0 8px 20px rgb(0 0 0 / 0.4), 0 0 0 1px rgb(255 255 255 / 0.04);
+  --shadow-xl: 0 14px 32px rgb(0 0 0 / 0.45), 0 0 0 1px rgb(255 255 255 / 0.05);
+  --shadow-2xl: 0 24px 56px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(255 255 255 / 0.05);
 }
 
 /*
@@ -468,3 +556,28 @@ html.dark ::placeholder { color: var(--color-fg-subtle); }
     scroll-behavior: auto !important;
   }
 }
+
+/* Toasts (react-toastify) on the design tokens — theme-aware, quiet. */
+:root {
+  --toastify-color-light: var(--color-surface-raised);
+  --toastify-text-color-light: var(--color-fg);
+  --toastify-color-success: var(--color-success);
+  --toastify-color-error: var(--color-danger);
+  --toastify-color-warning: var(--color-warning);
+  --toastify-color-info: var(--color-info);
+  --toastify-icon-color-success: var(--color-success);
+  --toastify-icon-color-error: var(--color-danger);
+  --toastify-icon-color-warning: var(--color-warning);
+  --toastify-icon-color-info: var(--color-info);
+  --toastify-font-family: var(--font-sans);
+  --toastify-z-index: 400;
+}
+.Toastify__toast {
+  min-height: 48px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  font-size: 13px;
+  padding: 10px 12px;
+}
+.Toastify__close-button { color: var(--color-fg-subtle); opacity: 1; }

@@ -3,7 +3,7 @@ import { CreateWorkspaceModal } from '../../components/sidebar/CreateWorkspaceMo
 import { ErrorState } from '../../components/ui';
 import { useAuth } from '../../contexts/AuthContext';
 import { pickLandingWorkspace } from '../../lib/workspaceLanding';
-import { LoadingScreen } from './WorkspaceLayout';
+import { LoadingScreen } from '../../components/ui/LoadingScreen';
 import { useWorkspaces } from './WorkspacesProvider';
 
 // Landing route for "/" — sends a signed-in user to their last-active
@@ -32,7 +32,7 @@ export const WorkspaceRedirect = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col items-center justify-center bg-gray-50 gap-4 p-6 text-center">
-      <h1 className="text-2xl font-black text-gray-900 tracking-tight">You're not in a workspace yet</h1>
+      <h1 className="text-2xl font-semibold text-gray-900 tracking-tight">You're not in a workspace yet</h1>
       <p className="text-gray-500 max-w-sm">Create one to get started — you'll be its admin, with a "General" channel ready to go.</p>
       <CreateWorkspaceModal isOpen onClose={() => {}} onCreated={() => refresh().catch(() => undefined)} />
     </div>

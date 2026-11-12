@@ -134,7 +134,8 @@ describe('Stage 1 — creating workspaces and organizations', () => {
     await grantTier(lead.user.id, 'TEAM_LEAD');
     expect((await create()).status).toBe(201);
     await prisma.user.update({ where: { id: lead.user.id }, data: { status: 'SUSPENDED' } });
-    expect((await create()).status).toBe(403);
+    // T.32 (audit H1): a suspended account's session no longer authenticates (401, was 403 from the tier rule).
+    expect((await create()).status).toBe(401);
   });
 });
 

@@ -17,6 +17,7 @@ import {
 import { ensureSharedWorkspaceMembership } from '../../lib/sharedWorkspace';
 import { addWorkspacePresence } from '../../sockets/presence.handlers';
 import { emitToWorkspace, subscribeUserToChannel } from '../../sockets/registry';
+import { emailDeliveryConfigured } from '../../lib/emailDelivery';
 import { ensureOrganizationsForUser, uniqueOrganizationSlug } from '../organizations/organizations.service';
 
 class HttpError extends Error {
@@ -139,6 +140,9 @@ const capabilitiesFor = (actor: WorkspaceActor) => ({
   canManage: canManageWorkspace(actor),
   canManageInvitations: canWorkspace(actor, 'workspace.manageInvitations'),
   canDelete: canWorkspace(actor, 'workspace.delete'),
+  // T.32 (audit FE-2): lets the sidebar hide "Create channel" when the
+  // workspace's channel-creation policy does not allow this member.
+  canCreateChannel: canWorkspace(actor, 'workspace.createChannel'),
 });
 
 export const listWorkspacesForUser = async (userId: string) => {
@@ -219,6 +223,8 @@ export const getWorkspaceSettings = async (userId: string, workspaceId: string) 
     ...workspace!,
     myRole: actor.workspaceRole,
     organizationRole: actor.organizationRole,
+    // T.36: lets the Invitations tab say up front that no e-mail can be sent.
+    emailInvitationsAvailable: emailDeliveryConfigured(),
     capabilities: {
       canUpdateSettings: canWorkspace(actor, 'workspace.updateSettings'),
       canChangeRoles: canWorkspace(actor, 'workspace.changeMemberRole'),

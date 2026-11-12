@@ -1,6 +1,8 @@
 import axios from 'axios';
 import { EmojiPicker } from '../ui/EmojiPicker';
-import { Hash, Loader2, Lock, Megaphone, X } from 'lucide-react';
+import { Hash, Lock, Megaphone } from 'lucide-react';
+import { Button } from '../ui/Button';
+import { Modal } from '../ui/Modal';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-toastify';
@@ -65,152 +67,124 @@ export const CreateChannelModal = ({ isOpen, onClose }: CreateChannelModalProps)
     }
   };
 
+  const fieldClass = 'w-full rounded-lg border border-line bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-subtle focus:border-brand';
+
+  // T.32 (audit FE-9): built on the shared accessible Modal (dialog role,
+  // focus trap, Escape, focus restore) instead of a hand-rolled overlay.
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200">
-        <form onSubmit={handleSubmit} className="p-8">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 bg-violet-50 rounded-xl flex items-center justify-center text-violet-600 shrink-0 border border-violet-100">
-              <Hash size={22} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="text-xl font-black text-gray-900 tracking-tight">Create a channel</h3>
-              <p className="text-xs text-gray-400 font-bold uppercase tracking-widest leading-none mt-1">Give your team a new space</p>
-            </div>
-            <button
-              type="button"
-              onClick={resetAndClose}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors shrink-0"
-            >
-              <X size={18} />
-            </button>
-          </div>
-
-          <div className="space-y-4">
-            <div>
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Channel Name</label>
-              <div className="flex items-center gap-3">
-                <div className="relative shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => setShowEmojiPicker((v) => !v)}
-                    title="Choose an icon"
-                    className={`w-[46px] h-[46px] rounded-xl border flex items-center justify-center transition-all active:scale-95 ${
-                      showEmojiPicker
-                        ? 'bg-violet-100 border-violet-300 ring-2 ring-violet-100'
-                        : 'bg-violet-50 border-violet-100 hover:bg-violet-100 hover:border-violet-200'
-                    }`}
-                  >
-                    {icon ? (
-                      <span className="text-xl leading-none">{icon}</span>
-                    ) : (
-                      <Hash size={20} className="text-violet-400" />
-                    )}
-                  </button>
-
-                  {showEmojiPicker && (
-                    <div className="absolute top-full left-0 mt-2 z-50 shadow-2xl rounded-xl border border-gray-100 overflow-hidden bg-white animate-in fade-in zoom-in-95 duration-150">
-                      <EmojiPicker
-                        onPick={(emoji) => {
-                          setIcon(emoji);
-                          setShowEmojiPicker(false);
-                        }}
-                      />
-                    </div>
-                  )}
+    <Modal
+      title="Create a channel"
+      subtitle="Channels are where your team talks about a topic or project."
+      onClose={resetAndClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={resetAndClose}>Cancel</Button>
+          <Button type="submit" form="create-channel-form" disabled={creating || !name.trim()} loading={creating}>
+            Create Channel
+          </Button>
+        </>
+      }
+    >
+      <form id="create-channel-form" onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label htmlFor="create-channel-name" className="mb-1.5 block text-xs font-medium text-fg-muted">Name</label>
+          <div className="flex items-center gap-2">
+            <div className="relative shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowEmojiPicker((v) => !v)}
+                title="Choose an icon"
+                aria-label={icon ? `Channel icon ${icon} — change` : 'Choose an icon'}
+                aria-expanded={showEmojiPicker}
+                className={`flex h-10 w-10 items-center justify-center rounded-lg border transition-colors ${showEmojiPicker ? 'border-brand bg-brand-soft' : 'border-line bg-surface-secondary hover:bg-surface-tertiary'}`}
+              >
+                {icon ? <span className="text-lg leading-none">{icon}</span> : <Hash size={17} className="text-fg-subtle" aria-hidden="true" />}
+              </button>
+              {showEmojiPicker && (
+                <div className="absolute left-0 top-full z-50 mt-2 overflow-hidden rounded-xl border border-line bg-surface shadow-xl animate-pop-in">
+                  <EmojiPicker
+                    onPick={(emoji) => {
+                      setIcon(emoji);
+                      setShowEmojiPicker(false);
+                    }}
+                  />
                 </div>
-
-                <input
-                  autoFocus
-                  type="text"
-                  maxLength={80}
-                  placeholder="product-launch"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="flex-1 min-w-0 bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm font-medium text-gray-900 outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-all"
-                />
-              </div>
+              )}
             </div>
+            <input
+              id="create-channel-name"
+              autoFocus
+              type="text"
+              maxLength={80}
+              placeholder="product-launch"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className={`${fieldClass} h-10 min-w-0 flex-1`}
+            />
+          </div>
+        </div>
 
-            <div>
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">
-                Description <span className="text-gray-300 normal-case font-medium">(optional)</span>
-              </label>
-              <textarea
-                rows={3}
-                maxLength={250}
-                placeholder="What's this channel about?"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm font-medium text-gray-900 outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500 transition-all resize-none"
-              />
-            </div>
+        <div>
+          <label htmlFor="create-channel-description" className="mb-1.5 block text-xs font-medium text-fg-muted">
+            Description <span className="font-normal text-fg-subtle">(optional)</span>
+          </label>
+          <textarea
+            id="create-channel-description"
+            rows={3}
+            maxLength={250}
+            placeholder="What's this channel about?"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            className={`${fieldClass} resize-none py-2`}
+          />
+        </div>
 
-            <fieldset>
-              <legend className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Channel type</legend>
-              <div className="grid grid-cols-2 gap-2">
-                {([
-                  ['PUBLIC', Hash, 'Public', 'Anyone in the workspace can find and join'],
-                  ['PRIVATE', Lock, 'Private', 'Only invited people can see it'],
-                ] as const).map(([value, Icon, label, hint]) => (
-                  <label
-                    key={value}
-                    className={`flex flex-col gap-1 rounded-xl border px-3 py-2.5 cursor-pointer transition-all ${
-                      visibility === value ? 'border-violet-500 bg-violet-50 ring-2 ring-violet-100' : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <span className="flex items-center gap-2 text-sm font-bold text-gray-900">
-                      <input
-                        type="radio"
-                        name="channel-visibility"
-                        value={value}
-                        checked={visibility === value}
-                        onChange={() => setVisibility(value)}
-                        className="accent-violet-600"
-                      />
-                      <Icon size={14} aria-hidden="true" /> {label}
-                    </span>
-                    <span className="text-[11px] text-gray-500 leading-snug">{hint}</span>
-                  </label>
-                ))}
-              </div>
-              <label className="mt-2 flex items-start gap-2 rounded-xl border border-gray-200 px-3 py-2.5 cursor-pointer hover:border-gray-300">
-                <input
-                  type="checkbox"
-                  checked={isAnnouncement}
-                  onChange={(e) => setIsAnnouncement(e.target.checked)}
-                  className="mt-0.5 accent-violet-600"
-                />
-                <span>
-                  <span className="flex items-center gap-1.5 text-sm font-bold text-gray-900">
-                    <Megaphone size={14} aria-hidden="true" /> Announcement channel
-                  </span>
-                  <span className="block text-[11px] text-gray-500 leading-snug">
-                    Only owners, moderators and workspace admins post; everyone can reply in threads and react.
-                  </span>
+        <fieldset>
+          <legend className="mb-1.5 block text-xs font-medium text-fg-muted">Channel type</legend>
+          <div className="grid grid-cols-2 gap-2">
+            {([
+              ['PUBLIC', Hash, 'Public', 'Anyone in the workspace can find and join'],
+              ['PRIVATE', Lock, 'Private', 'Only invited people can see it'],
+            ] as const).map(([value, Icon, label, hint]) => (
+              <label
+                key={value}
+                className={`flex cursor-pointer flex-col gap-1 rounded-lg border px-3 py-2.5 transition-colors ${
+                  visibility === value ? 'border-brand bg-brand-soft' : 'border-line hover:border-border-strong'
+                }`}
+              >
+                <span className="flex items-center gap-2 text-sm font-medium text-fg">
+                  <input
+                    type="radio"
+                    name="channel-visibility"
+                    value={value}
+                    checked={visibility === value}
+                    onChange={() => setVisibility(value)}
+                    className="accent-[var(--color-brand)]"
+                  />
+                  <Icon size={14} aria-hidden="true" /> {label}
                 </span>
+                <span className="text-[11px] leading-snug text-fg-subtle">{hint}</span>
               </label>
-            </fieldset>
+            ))}
           </div>
-
-          <div className="flex gap-3 mt-8">
-            <button
-              type="button"
-              onClick={resetAndClose}
-              className="flex-1 px-6 py-3 border border-gray-200 text-gray-600 font-black rounded-xl hover:bg-gray-50 transition-all active:scale-95 text-sm"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={creating || !name.trim()}
-              className="flex-1 px-6 py-3 bg-violet-600 text-white font-black rounded-xl hover:bg-violet-700 transition-all active:scale-95 text-sm disabled:opacity-50 flex items-center justify-center gap-2"
-            >
-              {creating ? <Loader2 size={16} className="animate-spin" /> : 'Create Channel'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+          <label className="mt-2 flex cursor-pointer items-start gap-2 rounded-lg border border-line px-3 py-2.5 hover:border-border-strong">
+            <input
+              type="checkbox"
+              checked={isAnnouncement}
+              onChange={(e) => setIsAnnouncement(e.target.checked)}
+              className="mt-0.5 accent-[var(--color-brand)]"
+            />
+            <span>
+              <span className="flex items-center gap-1.5 text-sm font-medium text-fg">
+                <Megaphone size={14} aria-hidden="true" /> Announcement channel
+              </span>
+              <span className="block text-[11px] leading-snug text-fg-subtle">
+                Only owners, moderators and workspace admins post; everyone can reply in threads and react.
+              </span>
+            </span>
+          </label>
+        </fieldset>
+      </form>
+    </Modal>
   );
 };

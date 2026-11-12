@@ -60,6 +60,26 @@ export const mergeMessages = <T extends OrderableMessage>(...lists: T[][]): T[] 
 /** Inserts or replaces a confirmed message (and retires its pending twin). */
 export const upsertMessage = <T extends OrderableMessage>(list: T[], message: T): T[] => mergeMessages(list, [message]);
 
+/**
+ * T.32 (audit RT-5): after a reconnect, the freshly fetched latest page is the
+ * truth for the time window it covers. Messages inside that window that the
+ * server no longer has were deleted while this client was offline and are
+ * dropped; the rest take the server's version (edits, reactions, pins, reply
+ * counts). Older history (outside the window) and unsent messages are kept.
+ * When the page reaches no further back than the newest message we have,
+ * the gap is larger than one page — the caller reloads instead.
+ */
+export const reconcileLatestWindow = <T extends OrderableMessage>(local: T[], page: T[]): T[] => {
+  if (page.length === 0) return local.filter((m) => isPending(m));
+  const oldest = page.reduce((min, m) => (compareConfirmed(m, min) < 0 ? m : min), page[0]);
+  const onPage = new Set(page.map((m) => m.id));
+  const kept = local.filter((m) => isPending(m) || onPage.has(m.id) || compareConfirmed(m, oldest) < 0);
+  // Server versions replace local ones wholesale (not merged field by field).
+  const byId = new Map(kept.map((m) => [m.id, m]));
+  for (const m of page) byId.set(m.id, m);
+  return mergeMessages(Array.from(byId.values()));
+};
+
 const ENTITIES: Record<string, string> = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&nbsp;': ' ' };
 
 /** Plain text of stored message HTML — for previews, pinned bar, URL extraction. */

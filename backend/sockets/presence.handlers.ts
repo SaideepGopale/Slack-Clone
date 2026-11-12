@@ -1,6 +1,7 @@
 import { Server } from 'socket.io';
 import { prisma } from '../lib/prisma';
 import { isAdminUser } from '../middleware/admin.middleware';
+import { HEARTBEAT_MS, getPresenceStore, PresenceRecord } from './presenceStore';
 import { getSocketServer, workspaceRoom } from './registry';
 import { AuthenticatedSocket } from './types';
 
@@ -18,119 +19,113 @@ import { AuthenticatedSocket } from './types';
  * Platform admins keep the global view the admin panel relies on, via the
  * dedicated `presence:admins` room (same event names, same payloads).
  *
- * In-memory, single-process (see revocation.ts for the multi-instance note).
+ * T.33: the state lives in a PresenceStore (presenceStore.ts) — in memory for
+ * one process, in Redis when REDIS_URL is set so every instance sees the same
+ * online set. Emits go to rooms, which the Socket.IO Redis adapter delivers
+ * on every instance.
  */
 
-interface OnlineUser {
-  id: string;
-  username: string;
-  status: string;
-  emoji: string;
-  sockets: Set<string>;
-  workspaceIds: Set<string>;
-  isAdmin: boolean;
-}
-
-export interface PublicPresence {
-  id: string;
-  username: string;
-  status: string;
-  emoji: string;
-}
+export type PublicPresence = PresenceRecord;
 
 const STATUS_EMOJI: Record<string, string> = { active: '🟢', away: '🟡', in_meeting: '🔴' };
-
-const onlineUsers = new Map<string, OnlineUser>();
 
 export { workspaceRoom };
 export const PRESENCE_ADMIN_ROOM = 'presence:admins';
 
-const toPublic = ({ id, username, status, emoji }: OnlineUser): PublicPresence => ({ id, username, status, emoji });
+const store = () => getPresenceStore();
 
-const sharesWorkspace = (a: Set<string>, b: Set<string>) => {
-  for (const id of a) if (b.has(id)) return true;
-  return false;
+// Everyone allowed to observe a user's presence.
+const audienceRooms = (workspaceIds: string[]) => [...workspaceIds.map(workspaceRoom), PRESENCE_ADMIN_ROOM];
+
+const emitOnlineCount = async (io: Server) => {
+  io.to(PRESENCE_ADMIN_ROOM).emit('admin:stats:onlineCount', await store().onlineCount());
 };
-
-// Everyone allowed to observe `subject`'s presence.
-const audienceRooms = (subject: OnlineUser) => [...Array.from(subject.workspaceIds).map(workspaceRoom), PRESENCE_ADMIN_ROOM];
-
-const snapshotFor = (viewer: OnlineUser): PublicPresence[] =>
-  Array.from(onlineUsers.values())
-    .filter((u) => viewer.isAdmin || u.id === viewer.id || sharesWorkspace(viewer.workspaceIds, u.workspaceIds))
-    .map(toPublic);
 
 /** Presence of `userId` as seen inside `workspaceId` (null = offline or not a member). */
-export const getPresenceInWorkspace = (userId: string, workspaceId: string): PublicPresence | null => {
-  const user = onlineUsers.get(userId);
-  return user && user.workspaceIds.has(workspaceId) ? toPublic(user) : null;
-};
+export const getPresenceInWorkspace = async (userId: string, workspaceId: string): Promise<PublicPresence | null> =>
+  (await store().presenceIn([userId], workspaceId)).get(userId) ?? null;
+
+/** Batch form for member lists (one round trip). */
+export const getPresenceMapInWorkspace = (userIds: string[], workspaceId: string) => store().presenceIn(userIds, workspaceId);
 
 export const registerPresenceHandlers = (io: Server, socket: AuthenticatedSocket) => {
   const user = socket.user;
   if (!user?.id) return;
-  let registered = false;
 
-  const init = async () => {
+  // Resolves true once this socket is counted as online. Every later handler
+  // waits for it, so a disconnect that races the initial queries is never
+  // lost (which would leave a ghost "online" socket behind).
+  const ready = (async () => {
     const [memberships, admin] = await Promise.all([
       prisma.workspaceMember.findMany({ where: { userId: user.id }, select: { workspaceId: true } }),
       isAdminUser(user.id),
     ]);
-    // The socket may have gone away while we were querying.
-    if (socket.disconnected) return;
+    if (socket.disconnected) return false;
 
     const workspaceIds = memberships.map((m) => m.workspaceId);
     if (workspaceIds.length > 0) socket.join(workspaceIds.map(workspaceRoom));
     if (admin) socket.join(PRESENCE_ADMIN_ROOM);
 
-    let presence = onlineUsers.get(user.id);
-    const isNew = !presence;
-    if (!presence) {
-      presence = {
-        id: user.id,
-        username: user.username,
-        status: 'active',
-        emoji: STATUS_EMOJI.active,
-        sockets: new Set(),
-        workspaceIds: new Set(),
-        isAdmin: admin,
-      };
-      onlineUsers.set(user.id, presence);
-    }
-    presence.sockets.add(socket.id);
-    for (const id of workspaceIds) presence.workspaceIds.add(id);
-    presence.isAdmin = admin;
-    registered = true;
-
-    socket.emit('presence:init', { users: snapshotFor(presence) });
+    const { isNew } = await store().connect({ id: user.id, username: user.username, isAdmin: admin }, socket.id, workspaceIds);
+    const users = await store().snapshotFor(user.id);
+    socket.emit('presence:init', { users });
     if (isNew) {
-      io.to(audienceRooms(presence)).emit('user:online', toPublic(presence));
-      io.to(PRESENCE_ADMIN_ROOM).emit('admin:stats:onlineCount', onlineUsers.size);
+      const self = users.find((u) => u.id === user.id) ?? { id: user.id, username: user.username, status: 'active', emoji: STATUS_EMOJI.active };
+      io.to(audienceRooms(workspaceIds)).emit('user:online', self);
+      await emitOnlineCount(io);
     }
-  };
-  init().catch((err) => console.error('presence init failed:', err));
+    return true;
+  })().catch((err) => {
+    console.error('presence init failed:', err instanceof Error ? err.message : err);
+    return false;
+  });
 
   socket.on('user:status', (data: { status?: unknown }) => {
-    const current = onlineUsers.get(user.id);
-    if (!registered || !current) return;
     const status = typeof data?.status === 'string' && data.status in STATUS_EMOJI ? data.status : null;
     if (!status) return;
-    current.status = status;
-    current.emoji = STATUS_EMOJI[status];
-    io.to(audienceRooms(current)).emit('user:online', toPublic(current));
+    ready
+      .then(async (ok) => {
+        if (!ok) return;
+        const result = await store().setStatus(user.id, status, STATUS_EMOJI[status]);
+        if (result) io.to(audienceRooms(result.workspaceIds)).emit('user:online', result.record);
+      })
+      .catch((err) => console.error('presence status failed:', err instanceof Error ? err.message : err));
   });
 
   socket.on('disconnect', () => {
-    if (!registered) return;
-    const current = onlineUsers.get(user.id);
-    if (!current) return;
-    current.sockets.delete(socket.id);
-    if (current.sockets.size === 0) {
-      onlineUsers.delete(user.id);
-      io.to(audienceRooms(current)).emit('user:offline', { id: user.id });
-      io.to(PRESENCE_ADMIN_ROOM).emit('admin:stats:onlineCount', onlineUsers.size);
-    }
+    ready
+      .then(async (ok) => {
+        if (!ok) return;
+        const result = await store().disconnect(user.id, socket.id);
+        if (!result.offline) return;
+        io.to(audienceRooms(result.workspaceIds)).emit('user:offline', { id: user.id });
+        await emitOnlineCount(io);
+      })
+      .catch((err) => console.error('presence disconnect failed:', err instanceof Error ? err.message : err));
   });
+};
+
+/**
+ * Keeps this instance's sockets fresh in the shared store and, on whichever
+ * instance holds the sweep lock, takes users offline whose instance died
+ * without running disconnect handlers. No-op work for the memory store.
+ */
+export const startPresenceHeartbeat = (io: Server) => {
+  const timer = setInterval(() => {
+    const local: [string, string][] = [];
+    for (const socket of io.sockets.sockets.values()) {
+      const id = (socket as AuthenticatedSocket).user?.id;
+      if (id) local.push([id, socket.id]);
+    }
+    (async () => {
+      await store().heartbeat(local);
+      const offline = await store().sweep();
+      for (const { userId, workspaceIds } of offline) io.to(audienceRooms(workspaceIds)).emit('user:offline', { id: userId });
+      if (offline.length > 0) await emitOnlineCount(io);
+    })().catch((err) => console.error('presence heartbeat failed:', err instanceof Error ? err.message : err));
+  }, HEARTBEAT_MS);
+  timer.unref();
+  return () => clearInterval(timer);
 };
 
 /** A user gained a workspace at runtime (created it, invite accepted, request approved). */
@@ -138,11 +133,12 @@ export const addWorkspacePresence = (userId: string, workspaceId: string) => {
   const io = getSocketServer();
   if (!io) return;
   io.in(`user:${userId}`).socketsJoin(workspaceRoom(workspaceId));
-  const presence = onlineUsers.get(userId);
-  if (!presence || presence.workspaceIds.has(workspaceId)) return;
-  presence.workspaceIds.add(workspaceId);
-  io.to(workspaceRoom(workspaceId)).emit('user:online', toPublic(presence));
-  io.to(`user:${userId}`).emit('presence:init', { users: snapshotFor(presence) });
+  (async () => {
+    const record = await store().addWorkspace(userId, workspaceId);
+    if (!record) return;
+    io.to(workspaceRoom(workspaceId)).emit('user:online', record);
+    io.to(`user:${userId}`).emit('presence:init', { users: await store().snapshotFor(userId) });
+  })().catch((err) => console.error('presence add failed:', err instanceof Error ? err.message : err));
 };
 
 /**
@@ -154,13 +150,17 @@ export const removeWorkspacePresence = (userId: string, workspaceId: string) => 
   const io = getSocketServer();
   if (!io) return;
   io.in(`user:${userId}`).socketsLeave(workspaceRoom(workspaceId));
-  const presence = onlineUsers.get(userId);
-  if (!presence) return;
-  presence.workspaceIds.delete(workspaceId);
-  for (const other of onlineUsers.values()) {
-    if (other.id === userId || other.isAdmin || !other.workspaceIds.has(workspaceId)) continue;
-    if (sharesWorkspace(other.workspaceIds, presence.workspaceIds)) continue;
-    io.to(`user:${other.id}`).emit('user:offline', { id: userId });
-  }
-  io.to(`user:${userId}`).emit('presence:init', { users: snapshotFor(presence) });
+  (async () => {
+    const result = await store().removeWorkspace(userId, workspaceId);
+    if (!result) return;
+    const remaining = new Set(result.remaining);
+    for (const otherId of await store().onlineUsersIn(workspaceId)) {
+      if (otherId === userId) continue;
+      const other = await store().infoOf(otherId);
+      if (!other || other.isAdmin) continue;
+      if (other.workspaceIds.some((w) => remaining.has(w))) continue;
+      io.to(`user:${otherId}`).emit('user:offline', { id: userId });
+    }
+    io.to(`user:${userId}`).emit('presence:init', { users: await store().snapshotFor(userId) });
+  })().catch((err) => console.error('presence remove failed:', err instanceof Error ? err.message : err));
 };

@@ -237,6 +237,8 @@ test('P2: provisioning, login, Collab, private workspace, direct add, isolation,
   await test.step('15. a declined call ends for the caller', async () => {
     await pa.goto(`/${teamWs}/c/${dmId}`);
     await pa.getByTitle('Start audio call').click();
+    // T.33: calls open in the pre-join lobby first.
+    await pa.getByRole('button', { name: 'Start call' }).click();
     await expect(pb.getByText(/Incoming audio call/)).toBeVisible();
     await pb.getByRole('button', { name: /Decline/ }).click();
     await expect(pa.getByText(`${b.username} declined the call.`)).toBeVisible();

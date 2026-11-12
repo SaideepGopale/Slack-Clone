@@ -160,8 +160,11 @@ test('two people: live chat, unread badge, in-channel search, DM placement and a
 
   // Calling: Alice rings Bob from the DM; Bob sees the incoming call and accepts.
   await a.getByTitle('Start audio call').click();
+  // T.33: calls open in the pre-join lobby first.
+  await a.getByRole('button', { name: 'Start call' }).click();
   await expect(b.getByText(/Incoming audio call/)).toBeVisible();
   await b.getByRole('button', { name: /Accept/ }).click();
+  await b.getByRole('button', { name: 'Join call' }).click(); // T.33 lobby
   await expect(b.getByTitle('End call')).toBeVisible();
   await expect(a.getByTitle('End call')).toBeVisible();
   await a.getByTitle('End call').click();

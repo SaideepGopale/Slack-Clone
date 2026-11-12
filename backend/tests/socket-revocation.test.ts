@@ -105,14 +105,16 @@ describe('deleted users lose their live socket sessions (FA-RT-03)', () => {
     victim.socket.emit('message:send', { channelId: w.generalChannelId, content: '<p>from a deleted account</p>' });
     const refused = new Promise<Error>((resolve) => victim.socket.once('connect_error', resolve));
     victim.socket.connect();
-    expect((await refused).message).toBe('Account suspended');
+    // T.32 (audit H1): a deleted account's sessions are gone, so the handshake says so.
+    expect((await refused).message).toMatch(/session has ended/i);
     expect(victim.socket.connected).toBe(false);
     expect((await otherSaw).filter((m) => m.content.includes('deleted account'))).toEqual([]);
     expect(await prisma.message.count({ where: { content: { contains: 'from a deleted account' } } })).toBe(0);
     expect(received).toEqual([]);
 
-    // A brand-new connection with that token is refused too.
-    await expect(connect(w.victim)).rejects.toThrow('Account suspended');
+    // A brand-new connection with that token is refused too (T.32: the
+    // account's sessions are gone, and the handshake says so).
+    await expect(connect(w.victim)).rejects.toThrow(/session has ended/i);
   });
 
   it('a deletion that does not happen revokes nothing (not an admin, no token, unknown user, self-deletion)', async () => {

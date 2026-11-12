@@ -6,7 +6,7 @@ import { Socket } from 'socket.io-client';
 import { useAuth } from '../../contexts/AuthContext';
 import { createClientId, DeliveryState, isPending, mergeMessages, PENDING_PREFIX, upsertMessage } from '../../lib/messages';
 import { sanitizeMessageHtml } from '../../lib/sanitizeHtml';
-import { isPreviewableImage } from '../../lib/chatPresentation';
+import { MessageAttachment } from './MessageAttachment';
 import { RichTextEditor, RichTextEditorHandle } from './RichTextEditor';
 
 interface ThreadReaction { emoji: string; count: number; users: { id: string; username: string }[]; }
@@ -233,7 +233,7 @@ export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose
 
   const renderMessage = (m: ThreadMessage, isParent = false) => (
     <div key={m.id} className={`flex gap-3 px-5 py-3 ${isParent ? '' : 'hover:bg-gray-50/70'}`}>
-      <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-500 to-violet-700 text-white flex items-center justify-center font-bold uppercase shrink-0 text-sm">
+      <div className="w-9 h-9 rounded-lg bg-accent-600 text-white flex items-center justify-center font-bold uppercase shrink-0 text-sm">
         {m.sender?.username?.[0]}
       </div>
       <div className="flex-1 min-w-0">
@@ -245,15 +245,7 @@ export const ThreadPanel = ({ messageId, channelId, channelName, socket, onClose
           <div className="rich-text text-[14px] text-fg leading-relaxed break-words" dangerouslySetInnerHTML={{ __html: sanitizeMessageHtml(m.content) }} />
         )}
         {m.editedAt && <span className="text-[11px] text-fg-subtle">(edited)</span>}
-        {m.fileUrl && isPreviewableImage(m.fileType, m.fileUrl) ? (
-          <a href={m.fileUrl} target="_blank" rel="noreferrer noopener" className="mt-2 block w-fit max-w-full">
-            <img src={m.fileUrl} alt={m.fileName || 'Shared image'} loading="lazy" className="max-h-60 max-w-full rounded-lg border border-line object-contain" />
-          </a>
-        ) : m.fileUrl ? (
-          <a href={m.fileUrl} target="_blank" rel="noreferrer noopener" className="text-xs text-violet-600 underline">
-            {m.fileName || 'Attachment'}
-          </a>
-        ) : null}
+        {m.fileUrl ? <MessageAttachment fileUrl={m.fileUrl} fileName={m.fileName} fileType={m.fileType} compact /> : null}
         {renderReactions(m)}
         {m.deliveryState === 'pending' && <div className="mt-1 text-[11px] text-gray-400" role="status">Sending…</div>}
         {m.deliveryState === 'failed' && m.clientId && (

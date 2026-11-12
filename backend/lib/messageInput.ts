@@ -61,6 +61,10 @@ export const isTrustedUploadUrl = (value: unknown): value is string => {
   );
 };
 
+/** An app path for a private attachment: "/api/attachments/<uuid>". */
+export const isAttachmentPath = (value: unknown): value is string =>
+  typeof value === 'string' && value.startsWith('/api/attachments/') && UUID_RE.test(value.slice('/api/attachments/'.length));
+
 /** Sanitized HTML, or null when the message has no visible text at all. */
 export const normalizeContent = (raw: unknown): Result<string | null> => {
   if (isBlank(raw)) return ok(null);
@@ -154,8 +158,12 @@ export const normalizeMessageInput = (data: unknown): Result<NormalizedMessageIn
   let fileName: string | null = null;
   let fileType: string | null = null;
   if (!isBlank(raw.fileUrl)) {
-    if (!isTrustedUploadUrl(raw.fileUrl)) return fail('Attachments must be uploaded through SmartConnect.');
-    fileUrl = raw.fileUrl;
+    // T.32 (audit H3): new uploads are private attachments referenced by app
+    // path; ownership and single use are enforced when the message is stored
+    // (sockets/messages.handlers.ts). Pre-T.32 public upload URLs still pass
+    // the trusted-URL rule below (they are already public).
+    if (!isAttachmentPath(raw.fileUrl) && !isTrustedUploadUrl(raw.fileUrl)) return fail('Attachments must be uploaded through SmartConnect.');
+    fileUrl = raw.fileUrl as string;
     const name = typeof raw.fileName === 'string' ? raw.fileName.replace(CONTROL_CHARS_RE, '').trim() : '';
     fileName = (name || 'attachment').slice(0, MESSAGE_LIMITS.fileName);
     const type = typeof raw.fileType === 'string' ? raw.fileType.trim() : '';

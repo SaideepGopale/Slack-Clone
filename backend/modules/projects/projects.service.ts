@@ -24,6 +24,9 @@ import {
   visibleProjectsWhere,
 } from '../../lib/policy';
 import { isGeneralChannel, lockChannelForPlacement, lockProjectForUpdate } from './projectGuards';
+import { parseProjectWorkFields } from './projectFields';
+import { canTask } from '../../lib/policy/task';
+import { taskCountsByProject } from '../tasks/taskCounts';
 import { assertChannelNameAvailable } from '../channels/channelNames';
 import {
   projectChannelView,
@@ -93,6 +96,9 @@ const capabilities = (actor: ProjectActor) => ({
   canCreateChannel: canProject(actor, 'project.createChannel'),
   canJoin: canProject(actor, 'project.join') && effectiveProjectRole(actor) === null,
   canLeave: canLeaveProject(actor),
+  // T.33
+  createTask: canTask(actor, 'task.create'),
+  manageTasks: canTask(actor, 'task.assignOthers'),
 });
 
 /** Locks the project for a write and refuses archived projects (re-checked under the lock). */
@@ -117,8 +123,9 @@ const projectDetail = async (actor: ProjectActor) => {
     },
   });
   if (!row) throw new HttpError(404, 'Project not found.');
+  const counts = await taskCountsByProject([row.id]);
   return {
-    ...projectSummary(row),
+    ...projectSummary(row, counts.get(row.id)),
     owner: row.members[0]?.user ?? null,
     createdBy: row.createdBy,
     archivedBy: row.archivedBy,
@@ -173,10 +180,11 @@ export const listProjects = async (userId: string, workspaceId: string, query: R
   });
 
   const page = rows.slice(0, limit);
+  const counts = await taskCountsByProject(page.map((row) => row.id));
   const projects = page.flatMap((row) => {
     const actor = toProjectActor(workspace, row, row.members[0]?.role ?? null);
     if (!canProject(actor, 'project.view')) return [];
-    return [{ ...projectSummary(row), myRole: effectiveProjectRole(actor) }];
+    return [{ ...projectSummary(row, counts.get(row.id)), myRole: effectiveProjectRole(actor) }];
   });
   return { projects, nextCursor: rows.length > limit ? page[page.length - 1].id : null };
 };
@@ -261,10 +269,12 @@ export const createProject = async (userId: string, workspaceId: string, body: R
   const name = parseName(body?.name);
   const description = parseDescription(body?.description);
   const visibility = body?.visibility === undefined ? 'PUBLIC' : parseVisibility(body.visibility);
+  const work = parseProjectWorkFields(body);
 
   // One statement: the project never exists without its owner.
   const project = await prisma.project.create({
     data: {
+      ...(work as Prisma.ProjectUncheckedCreateInput),
       workspaceId,
       name,
       description,
@@ -288,6 +298,9 @@ export const updateProject = async (userId: string, projectId: string, body: Rec
   if (body?.description !== undefined) data.description = parseDescription(body.description);
   const visibility = body?.visibility !== undefined ? parseVisibility(body.visibility) : undefined;
   if (visibility) data.visibility = visibility;
+  // T.33: lifecycle fields (status, key, review rule, dates).
+  const current = await prisma.project.findUniqueOrThrow({ where: { id: actor.projectId }, select: { startDate: true, dueDate: true } });
+  Object.assign(data, parseProjectWorkFields(body, current));
   if (Object.keys(data).length === 0) throw new HttpError(400, 'Nothing to update.');
 
   const previousVisibility = await prisma.$transaction(async (tx) => {

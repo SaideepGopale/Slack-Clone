@@ -159,6 +159,22 @@ export const ChannelSearch = ({ scope, workspace = null, onOpenResult }: Channel
     e.preventDefault();
   };
 
+  // T.32: ⌘K / Ctrl+K focuses search from anywhere in the workspace (the
+  // search itself is the real server-side message search).
+  const shortcutLabel = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K';
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        inputRef.current?.focus();
+        inputRef.current?.select();
+        setOpen(true);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
+
   const scopeLabel = workspaceMode ? workspace!.name : scope ? (scope.isDM ? scope.name : `#${scope.name}`) : null;
   const showPanel = open && (!!scope || workspaceMode) && query.trim().length >= MIN_QUERY;
   // The listbox exists only when there is something to choose from.
@@ -166,9 +182,9 @@ export const ChannelSearch = ({ scope, workspace = null, onOpenResult }: Channel
   const optionId = (index: number) => `${listId}-option-${index}`;
 
   return (
-    <div ref={containerRef} className="w-full max-w-2xl px-2 md:px-4 relative group">
-      <div className="absolute left-6 md:left-8 top-1/2 -translate-y-1/2 text-gray-300 group-focus-within:text-white pointer-events-none transition-all z-10">
-        <Search size={16} aria-hidden="true" />
+    <div ref={containerRef} className="relative min-w-0 flex-1 max-w-xl px-1 md:px-3 group">
+      <div className="absolute left-4 md:left-6 top-1/2 -translate-y-1/2 text-sidebar-fg-muted group-focus-within:text-sidebar-fg pointer-events-none transition-colors z-10">
+        <Search size={14} aria-hidden="true" />
       </div>
       <input
         ref={inputRef}
@@ -188,8 +204,13 @@ export const ChannelSearch = ({ scope, workspace = null, onOpenResult }: Channel
         onFocus={() => setOpen(true)}
         onKeyDown={onKeyDown}
         placeholder={scopeLabel ? `Search messages in ${scopeLabel}` : 'Open a channel or conversation to search it'}
-        className="w-full bg-white/10 backdrop-blur-sm border border-white/20 focus:border-white/40 focus:bg-white/20 rounded-xl py-2.5 pl-10 md:pl-12 pr-9 text-sm text-white placeholder-gray-300 outline-none transition-all placeholder:font-normal shadow-inner disabled:opacity-60 disabled:cursor-not-allowed [&::-webkit-search-cancel-button]:hidden"
+        className="w-full h-8 bg-white/[0.07] border border-white/[0.08] focus:border-accent-400/60 focus:bg-white/[0.11] rounded-lg pl-8 md:pl-9 pr-14 text-[13px] text-sidebar-fg placeholder:text-sidebar-fg-muted outline-none transition-colors disabled:opacity-60 disabled:cursor-not-allowed [&::-webkit-search-cancel-button]:hidden"
       />
+      {!query && (
+        <kbd aria-hidden="true" className="pointer-events-none absolute right-3 md:right-5 top-1/2 hidden -translate-y-1/2 rounded border border-white/10 px-1.5 py-px font-sans text-[10px] text-sidebar-fg-muted sm:block">
+          {shortcutLabel}
+        </kbd>
+      )}
       {query && (
         <button
           type="button"
@@ -198,7 +219,7 @@ export const ChannelSearch = ({ scope, workspace = null, onOpenResult }: Channel
             setQuery('');
             inputRef.current?.focus();
           }}
-          className="absolute right-4 md:right-6 top-1/2 -translate-y-1/2 p-1 rounded text-gray-300 hover:text-white"
+          className="absolute right-3 md:right-5 top-1/2 -translate-y-1/2 p-1 rounded text-sidebar-fg-muted hover:text-sidebar-fg"
         >
           <X size={14} aria-hidden="true" />
         </button>

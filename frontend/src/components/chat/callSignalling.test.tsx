@@ -95,7 +95,8 @@ afterEach(() => {
 const startCall = async () => {
   const socket = new FakeSocket();
   render(<CallOverlay channelId={CHANNEL} callType="audio" socket={socket as unknown as Socket} onEndCall={vi.fn()} workspaceId="ws-1" />);
-  await waitFor(() => expect(socket.emitted('webrtc:join')).toEqual([{ channelId: CHANNEL }]));
+  // T.33: the join announces the microphone/camera state (audio call: mic on, no video).
+  await waitFor(() => expect(socket.emitted('webrtc:join')).toEqual([{ channelId: CHANNEL, media: { audio: true, video: false } }]));
   return socket;
 };
 

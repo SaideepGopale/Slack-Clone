@@ -87,9 +87,14 @@ export const createWorkspace = async (page: Page, name: string) => {
   const railButton = rail.getByRole('button', { name: 'Create a workspace' });
   // Signed in once the workspace rail shows: grant the creator the Team Lead tier.
   await expect(inlineForm.or(rail).first()).toBeVisible();
-  const signedIn = JSON.parse((await page.evaluate(() => localStorage.getItem('user'))) ?? 'null') as { email?: string } | null;
+  // T.32: the app no longer keeps a copy of the user object in localStorage —
+  // ask the API who is signed in (the session token is all the page stores).
+  const token = await pageToken(page);
+  expect(token, 'a signed-in session').toBeTruthy();
+  const me = await page.request.get(`${API_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${token}` } });
+  const signedIn = (await me.json()) as { email?: string };
   expect(signedIn?.email, 'a signed-in account').toBeTruthy();
-  makeTeamLead(signedIn!.email!);
+  makeTeamLead(signedIn.email!);
   // Stage 3 (T.22): "Create a workspace" is only offered to accounts that may
   // create workspaces — reload so the page picks up the newly granted tier.
   await page.reload();
@@ -112,8 +117,18 @@ export const sendMessage = async (page: Page, text: string) => {
   await editor.press('Enter');
 };
 
+/**
+ * The token this page signs in with: the shared localStorage one, or — in a
+ * T.37 isolated development tab — that tab's own (sessionStorage), mirroring
+ * src/lib/devTabSession.ts.
+ */
+export const pageToken = (page: Page) =>
+  page.evaluate(() =>
+    sessionStorage.getItem('smartconnect:dev:tab-session') === '1' ? sessionStorage.getItem('smartconnect:dev:tab-token') : localStorage.getItem('token')
+  );
+
 export const tokenOf = async (page: Page) => {
-  const token = await page.evaluate(() => localStorage.getItem('token'));
+  const token = await pageToken(page);
   expect(token, 'signed-in session token').toBeTruthy();
   return token as string;
 };

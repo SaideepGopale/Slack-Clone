@@ -46,6 +46,13 @@ interface RichTextEditorProps {
   // stale closure over "content at editor-creation time" is exactly the bug
   // this ref-based design avoids.
   onSubmit?: () => void;
+  /**
+   * T.39: false on touch phones — Enter inserts a new line (no Shift key on a
+   * phone keyboard) and the Send button sends. Ctrl/⌘+Enter always sends.
+   */
+  enterSends?: boolean;
+  /** T.39: hide the formatting toolbar below 768px (the composer's "Aa" button shows it). */
+  formattingHiddenOnPhone?: boolean;
   /** P2: files pasted into the editor (images/screenshots) — the composer attaches them. */
   onPasteFiles?: (files: File[]) => void;
   /** P2: the "@query" being typed right before the cursor, or null when there is none. */
@@ -107,7 +114,9 @@ const ToolbarButton = ({
 const Divider = () => <span aria-hidden="true" className="w-px h-4 bg-line mx-1 shrink-0" />;
 
 export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorProps>(
-  ({ placeholder, initialContent = '', autoFocus, compact, onChangeContent, onSubmit, onPasteFiles, onMentionQuery, onMentionKey }, ref) => {
+  ({ placeholder, initialContent = '', autoFocus, compact, onChangeContent, onSubmit, enterSends = true, formattingHiddenOnPhone = false, onPasteFiles, onMentionQuery, onMentionKey }, ref) => {
+    const enterSendsRef = useRef(enterSends);
+    enterSendsRef.current = enterSends;
     // useEditor's `editorProps.handleKeyDown` is a raw ProseMirror option —
     // unlike onUpdate/onCreate, TipTap doesn't necessarily re-bind it on
     // every render, so closing over `onSubmit` directly risks calling a
@@ -172,6 +181,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
           const { $from } = view.state.selection;
           const inBlock = Array.from({ length: $from.depth + 1 }, (_, d) => $from.node(d).type.name).some((n) => n === 'codeBlock' || n === 'listItem');
           if (inBlock && !(event.metaKey || event.ctrlKey)) return false;
+          if (!enterSendsRef.current && !(event.metaKey || event.ctrlKey)) return false;
           event.preventDefault();
           onSubmitRef.current?.();
           return true;
@@ -284,7 +294,7 @@ export const RichTextEditor = forwardRef<RichTextEditorHandle, RichTextEditorPro
           <div
             role="toolbar"
             aria-label="Formatting"
-            className={`flex items-center gap-0.5 overflow-x-auto no-scrollbar ${compact ? 'mb-1.5 pb-1.5' : 'mb-2 pb-2'} border-b border-line`}
+            className={`flex items-center gap-0.5 overflow-x-auto no-scrollbar ${compact ? 'mb-1.5 pb-1.5' : 'mb-2 pb-2'} border-b border-line ${formattingHiddenOnPhone ? 'max-md:hidden' : ''}`}
           >
             <ToolbarButton active={state.bold} onClick={() => chain().toggleBold().run()} label="Bold" shortcut="Ctrl+B"><Bold size={size} /></ToolbarButton>
             <ToolbarButton active={state.italic} onClick={() => chain().toggleItalic().run()} label="Italic" shortcut="Ctrl+I"><Italic size={size} /></ToolbarButton>

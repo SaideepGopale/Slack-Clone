@@ -1,5 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
+import { TaskCounts, taskCountsByProject } from '../tasks/taskCounts';
+import { projectKey } from '../tasks/tasks.views';
 
 /**
  * Response shapes for projects. Summaries carry no per-viewer fields, so the
@@ -16,6 +18,12 @@ export const projectSummarySelect = {
   archivedAt: true,
   createdAt: true,
   updatedAt: true,
+  // T.33: lifecycle and task settings.
+  status: true,
+  key: true,
+  requireReview: true,
+  startDate: true,
+  dueDate: true,
   // Batch 3/D: public channels only — summaries go to every project viewer,
   // and private channels must not be counted for people outside them.
   _count: { select: { members: true, channels: { where: { visibility: 'PUBLIC', isDM: false } } } },
@@ -23,7 +31,9 @@ export const projectSummarySelect = {
 
 type ProjectSummaryRow = Prisma.ProjectGetPayload<{ select: typeof projectSummarySelect }>;
 
-export const projectSummary = (row: ProjectSummaryRow) => ({
+const EMPTY_COUNTS: TaskCounts = { total: 0, open: 0, done: 0, overdue: 0 };
+
+export const projectSummary = (row: ProjectSummaryRow, taskCounts: TaskCounts = EMPTY_COUNTS) => ({
   id: row.id,
   workspaceId: row.workspaceId,
   name: row.name,
@@ -33,6 +43,12 @@ export const projectSummary = (row: ProjectSummaryRow) => ({
   archivedAt: row.archivedAt,
   memberCount: row._count.members,
   channelCount: row._count.channels,
+  status: row.status,
+  key: projectKey(row),
+  requireReview: row.requireReview,
+  startDate: row.startDate,
+  dueDate: row.dueDate,
+  taskCounts,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });
@@ -41,7 +57,8 @@ export type ProjectSummary = ReturnType<typeof projectSummary>;
 
 export const loadProjectSummary = async (projectId: string): Promise<ProjectSummary | null> => {
   const row = await prisma.project.findUnique({ where: { id: projectId }, select: projectSummarySelect });
-  return row ? projectSummary(row) : null;
+  if (!row) return null;
+  return projectSummary(row, (await taskCountsByProject([row.id])).get(row.id));
 };
 
 // Usernames only — project listings never expose emails or read positions.

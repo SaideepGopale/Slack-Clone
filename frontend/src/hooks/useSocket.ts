@@ -1,5 +1,19 @@
+import axios from 'axios';
 import { useEffect, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
+
+/**
+ * T.32 (audit FE-10): where the real-time server lives. VITE_BACKEND_URL,
+ * else the API origin, else — in development only — the local backend. A
+ * production build never silently targets localhost; it falls back to its
+ * own origin, the same rule the REST client uses.
+ */
+export const socketServerUrl = (env: { VITE_BACKEND_URL?: string; VITE_API_URL?: string; DEV?: boolean } = import.meta.env) =>
+  env.VITE_BACKEND_URL || env.VITE_API_URL || (env.DEV ? 'http://localhost:3000' : typeof window !== 'undefined' ? window.location.origin : '');
+
+// Network-level failures (retry silently) vs. refusals by the server's
+// authentication check (the session may be over — ask the API).
+const TRANSPORT_ERRORS = /xhr poll error|websocket error|timeout|transport/i;
 
 export const useSocket = (token: string | null) => {
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -7,9 +21,7 @@ export const useSocket = (token: string | null) => {
   useEffect(() => {
     if (!token) return;
 
-    // Local default = the backend dev server (PORT=3000, P0); production sets VITE_BACKEND_URL.
-    const backendUrl = import.meta.env.VITE_BACKEND_URL ?? 'http://localhost:3000';
-    const newSocket = io(backendUrl, {
+    const newSocket = io(socketServerUrl(), {
       auth: { token },
       transports: ['websocket', 'polling'],
       reconnection: true,
@@ -23,8 +35,15 @@ export const useSocket = (token: string | null) => {
 
     setSocket(newSocket);
 
+    // T.32 (audit FE-11): when the server refuses the socket's session, check
+    // the session over REST — a 401 there signs the user out (AuthContext's
+    // interceptor) instead of the socket retrying a dead token forever.
+    let lastProbe = 0;
     newSocket.on('connect_error', (err) => {
       console.warn('Socket connection error:', err.message);
+      if (TRANSPORT_ERRORS.test(err.message) || Date.now() - lastProbe < 15_000) return;
+      lastProbe = Date.now();
+      axios.get('/api/auth/me').catch(() => undefined);
     });
 
     newSocket.on('error', (err) => {

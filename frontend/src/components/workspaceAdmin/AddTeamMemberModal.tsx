@@ -101,6 +101,10 @@ export const AddTeamMemberModal = ({
         <Field label="Display name (optional)">
           <TextInput autoComplete="off" maxLength={80} value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="Mia Chen" />
         </Field>
+        {/* T.36: shown, never sent — the server only ever creates Members here. */}
+        <Field label="Role" hint="New people join as Members. Workspace admins must be Team Leads, who are created by the Company Admin.">
+          <TextInput value="Member" readOnly aria-readonly="true" tabIndex={-1} className="bg-surface-secondary text-fg-muted" />
+        </Field>
       </form>
       {existing && (
         <div className="mt-4 rounded-xl border border-line bg-surface-secondary p-4 space-y-3" role="status">

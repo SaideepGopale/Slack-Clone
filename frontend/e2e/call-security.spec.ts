@@ -87,6 +87,8 @@ test('call signaling reaches only participants of the same call; media needs an 
   //    (The dev build runs React StrictMode, which mounts the call overlay twice, so the count may be 2.)
   expect(await mediaRequests(a)).toBe(0);
   await a.getByTitle('Start audio call').click();
+  // T.33: calls open in the pre-join lobby first.
+  await a.getByRole('button', { name: 'Start call' }).click();
   await expect.poll(() => mediaRequests(a)).toBeGreaterThan(0);
   await expect(b.getByText(/Incoming audio call/)).toBeVisible();
   await expect(c.getByText(/Incoming audio call/)).toBeVisible();
@@ -95,6 +97,7 @@ test('call signaling reaches only participants of the same call; media needs an 
 
   // 2. Bob accepts (explicit action): the legitimate channel call really connects.
   await b.getByRole('button', { name: /Accept/ }).click();
+  await b.getByRole('button', { name: 'Join call' }).click(); // T.33 lobby
   await expect.poll(() => mediaRequests(b)).toBeGreaterThan(0);
   await expect.poll(() => hasConnectedPeer(a), { timeout: 30_000 }).toBe(true);
   await expect.poll(() => hasConnectedPeer(b), { timeout: 30_000 }).toBe(true);
@@ -176,6 +179,8 @@ test('incoming calls show the real caller; spoofed or malformed rings never reac
 
   // 1. A normal ring from the UI shows the caller's real (server-derived) name.
   await a.getByTitle('Start audio call').click();
+  // T.33: calls open in the pre-join lobby first.
+  await a.getByRole('button', { name: 'Start call' }).click();
   await expect(incomingBanner(b)).toContainText('Incoming audio call');
   await expect(incomingBanner(b)).toContainText(alice.username);
   await b.getByRole('button', { name: /Decline/ }).click();

@@ -10,6 +10,7 @@ export * as channelsApi from './channels';
 export * as invitationsApi from './invitations';
 export * as organizationsApi from './organizations';
 export * as projectsApi from './projects';
+export * as tasksApi from './tasks';
 export * as teamManagementApi from './teamManagement';
 export * as workspacesApi from './workspaces';
 export type { SearchResult } from './channels';
@@ -25,4 +26,5 @@ export type {
   Page,
 } from './organizations';
 export type { ProjectDetails, ProjectSummary } from './projects';
+export type { TaskDetail, TaskStatus, TaskPriority, TaskView } from './tasks';
 export type { ChannelCreationPolicy, WorkspaceRole, WorkspaceSettings, WorkspaceSettingsCapabilities } from './workspaces';

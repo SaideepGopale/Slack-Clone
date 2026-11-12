@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { Prisma, Role, UserStatus } from '@prisma/client';
 import { prisma } from '../../lib/prisma';
 import { issuePasswordReset } from '../auth/auth.service';
-import { kickUserSockets } from '../../sockets/registry';
+import { revokeAllSessions } from '../../lib/sessions';
 import { toCsv } from '../../utils/csv';
 import { logAuditEvent } from '../../lib/auditLog';
 import { sanitizeMessageHtml } from '../../lib/sanitize';
@@ -217,7 +217,9 @@ export const updateUserStatus = async (adminId: string, targetUserId: string, st
   });
 
   if (updated.status !== 'ACTIVE') {
-    kickUserSockets(updated.id);
+    // T.32 (audit H1): end every REST session too, not only live sockets —
+    // revokeAllSessions also disconnects the sockets.
+    await revokeAllSessions(updated.id);
   }
 
   const auditAction = updated.status === 'BANNED' ? 'BAN_USER' : updated.status === 'SUSPENDED' ? 'SUSPEND_USER' : 'REACTIVATE_USER';

@@ -169,7 +169,7 @@ describe('workspace creation and direct membership (P2)', () => {
 
     const found = await as(owner).get(`/api/workspaces/${workspaceId}/member-candidates?q=${member.username}`);
     expect(found.status).toBe(200);
-    expect(found.body.users).toEqual([{ id: member.id, username: member.username, displayName: member.displayName }]);
+    expect(found.body.users).toEqual([{ id: member.id, username: member.username, displayName: (member as { displayName?: string | null }).displayName }]);
     expect((await as(owner).get(`/api/workspaces/${workspaceId}/member-candidates?q=${encodeURIComponent(member.loginId as string)}`)).body.users.map((u: { id: string }) => u.id)).toEqual([member.id]);
     expect((await as(owner).get(`/api/workspaces/${workspaceId}/member-candidates?q=@2003`)).body.users).toEqual([]); // no substring login search
     expect((await as(member).get(`/api/workspaces/${workspaceId}/member-candidates?q=x`)).status).toBe(403);

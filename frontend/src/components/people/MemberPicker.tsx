@@ -100,7 +100,7 @@ export const MemberPicker = ({ workspaceId, selected, onChange, excludeIds = [],
                     aria-pressed={isSelected}
                     className="w-full flex items-center gap-3 px-2 py-2 rounded-lg text-left hover:bg-gray-50 disabled:opacity-40"
                   >
-                    <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-violet-700 text-white flex items-center justify-center text-xs font-bold uppercase shrink-0">
+                    <span className="w-8 h-8 rounded-lg bg-accent-600 text-white flex items-center justify-center text-xs font-bold uppercase shrink-0">
                       {m.username[0]}
                     </span>
                     <span className="flex-1 min-w-0">

@@ -5,6 +5,7 @@ import { useSearchParams } from 'react-router-dom';
 import { toast } from 'react-toastify';
 import { useAuth } from '../../contexts/AuthContext';
 import { isInvitationToken } from '../../lib/invitationToken';
+import { BrandMark } from '../ui/Brand';
 
 interface AuthFormProps {
   // /signup lands here defaulted to the Sign Up tab instead of Login.
@@ -83,215 +84,170 @@ export const AuthForm = ({ startOnSignup = false, presetEmail }: AuthFormProps) 
     setPassword('');
   };
 
-  // ==========================================
-  // 🏢 PROFESSIONAL ADMIN UI (ENTERPRISE GRADE)
-  // ==========================================
-  if (isAdminMode) {
-    return (
-      <div className="min-h-screen bg-[#0B101E] flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-indigo-500/30">
-        
-        <div className="sm:mx-auto sm:w-full sm:max-w-md flex flex-col items-center animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <div className="w-14 h-14 bg-indigo-500/10 border border-indigo-500/20 rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-indigo-500/10">
-            <Shield className="text-indigo-400" size={28} strokeWidth={1.5} />
-          </div>
-          <h2 className="text-center text-3xl font-bold text-white tracking-tight">
-            Workspace Administration
-          </h2>
-          <p className="mt-2 text-center text-sm text-gray-400 font-medium">
-            Sign in with your master credentials to continue
-          </p>
-        </div>
+  // T.32 design: one sign-in surface for both modes. The administrator mode
+  // is a visual variant only — it calls the same login() as everyone else
+  // (the server decides who is an administrator).
+  const isSignup = !isAdminMode && !isLogin;
+  const fieldClass =
+    'block h-10 w-full rounded-lg border border-line bg-surface px-3 text-sm text-fg outline-none transition-colors placeholder:text-fg-subtle focus:border-brand disabled:cursor-not-allowed disabled:bg-surface-tertiary disabled:text-fg-muted';
 
-        <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md animate-in fade-in zoom-in-95 duration-500 delay-100">
-          <div className="bg-[#121827] py-8 px-4 shadow-2xl sm:rounded-2xl sm:px-10 border border-[#1F2937] relative overflow-hidden">
-            
-            {/* Subtle top gradient accent */}
-            <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-indigo-500 to-transparent opacity-40" />
-
-            {message && (
-              <div className={`p-4 rounded-xl mb-6 text-sm font-medium flex items-center gap-3 border ${message.type === 'error' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-green-500/10 text-green-400 border-green-500/20'}`}>
-                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${message.type === 'error' ? 'bg-red-400' : 'bg-green-400'}`} />
-                {message.text}
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="space-y-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Admin Email Address
-                </label>
-                <div className="mt-1">
-                  <input 
-                    required 
-                    type="email" 
-                    value={email} 
-                    onChange={(e) => setEmail(e.target.value)} 
-                    className="appearance-none block w-full px-4 py-3 border border-[#374151] rounded-xl shadow-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-[#0B101E] text-white text-sm transition-all" 
-                    placeholder="admin@slick.com" 
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Security Password
-                </label>
-                <div className="mt-1 relative">
-                  <input 
-                    required 
-                    type={showPassword ? 'text' : 'password'} 
-                    value={password} 
-                    onChange={(e) => setPassword(e.target.value)} 
-                    className="appearance-none block w-full pl-4 pr-12 py-3 border border-[#374151] rounded-xl shadow-sm placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-[#0B101E] text-white text-sm transition-all" 
-                    placeholder="••••••••" 
-                  />
-                  <button 
-                    type="button" 
-                    onClick={() => setShowPassword(!showPassword)} 
-                    className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 transition-colors"
-                  >
-                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-              </div>
-
-              <div className="pt-2">
-                <button 
-                  disabled={loading} 
-                  type="submit" 
-                  className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-xl shadow-sm text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-600 focus:ring-offset-[#121827] transition-all disabled:opacity-70 disabled:cursor-not-allowed"
-                >
-                  {loading ? <Loader2 size={18} className="animate-spin" /> : <><Lock size={16} /> Authenticate Session</>}
-                </button>
-              </div>
-            </form>
-
-            <div className="mt-8 pt-6 border-t border-[#1F2937]">
-              <button 
-                type="button" 
-                onClick={toggleAdminMode} 
-                className="w-full text-center text-sm font-medium text-gray-400 hover:text-white transition-colors flex items-center justify-center gap-2"
-              >
-                <ArrowRight size={14} className="rotate-180" /> Return to User Sign In
-              </button>
-            </div>
-
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ==========================================
-  // 🌟 NORMAL USER UI (CLEAN & MODERN)
-  // ==========================================
   return (
-    <div className="min-h-screen bg-[#faf9fa] flex items-center justify-center p-4 md:p-8 font-sans">
-      <div className="max-w-5xl w-full grid md:grid-cols-2 gap-12 lg:gap-24 items-center animate-in fade-in zoom-in-95 duration-500">
-        
-        {/* Left Side Info */}
-        <div className="hidden md:flex flex-col gap-8">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-[#350d36] rounded-xl flex items-center justify-center text-white font-black text-xl shadow-lg">S</div>
-            <span className="text-2xl font-black text-gray-900 tracking-tight">Slick</span>
-          </div>
-          <div>
-            <h1 className="text-4xl lg:text-5xl font-black text-gray-900 tracking-tight leading-[1.1] mb-6">Welcome back to<br />the workspace.</h1>
-            <p className="text-gray-500 text-base font-medium max-w-md leading-relaxed">Ditch the noise. Connect with your team in a beautifully designed space that facilitates focus and creativity.</p>
-          </div>
-          <div className="flex flex-col gap-6 mt-4">
-            <div className="flex items-start gap-4">
-              <div className="p-2.5 bg-green-50 text-green-600 rounded-xl shrink-0"><ShieldCheck size={20} /></div>
-              <div><h3 className="font-bold text-gray-900 text-sm mb-1">Secure Database</h3><p className="text-xs text-gray-500 font-medium">Encryption at rest and in transit.</p></div>
-            </div>
-            <div className="flex items-start gap-4">
-              <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl shrink-0"><Zap size={20} /></div>
-              <div><h3 className="font-bold text-gray-900 text-sm mb-1">Instant Sync</h3><p className="text-xs text-gray-500 font-medium">Built on ultra-fast WebSocket cores.</p></div>
-            </div>
-          </div>
+    <div className="flex min-h-screen bg-surface-secondary font-sans">
+      {/* Brand panel */}
+      <aside className="relative hidden w-[44%] max-w-xl flex-col justify-between overflow-hidden bg-sidebar p-10 text-sidebar-fg lg:flex">
+        <span className="inline-flex items-center gap-2.5">
+          <BrandMark size={30} />
+          <span className="text-[15px] font-semibold tracking-[-0.01em] text-white">SmartConnect</span>
+        </span>
+        <div>
+          <h1 className="text-[34px] font-semibold leading-[1.15] tracking-[-0.02em] text-white">
+            {isAdminMode ? 'Run your company’s workspace.' : 'Where your team’s work happens.'}
+          </h1>
+          <p className="mt-4 max-w-sm text-[15px] leading-relaxed text-sidebar-fg-muted">
+            {isAdminMode
+              ? 'Provision team leads, manage people and keep an eye on every workspace — from one console.'
+              : 'Channels, direct messages, threads and calls in one calm, fast place.'}
+          </p>
+          <ul className="mt-8 space-y-3 text-sm">
+            {(isAdminMode
+              ? [
+                  { icon: <Shield size={15} aria-hidden="true" />, text: 'Access checked on the server for every request' },
+                  { icon: <ShieldCheck size={15} aria-hidden="true" />, text: 'Every administrative action is audit-logged' },
+                ]
+              : [
+                  { icon: <Zap size={15} aria-hidden="true" />, text: 'Real-time messages, reactions and threads' },
+                  { icon: <ShieldCheck size={15} aria-hidden="true" />, text: 'Invitation-only workspaces and private files' },
+                ]
+            ).map((item) => (
+              <li key={item.text} className="flex items-center gap-3">
+                <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/[0.07] text-accent-300">{item.icon}</span>
+                {item.text}
+              </li>
+            ))}
+          </ul>
         </div>
+        <p className="text-xs text-sidebar-fg-muted">© {new Date().getFullYear()} SmartConnect Collab</p>
+      </aside>
 
-        {/* Right Side Form */}
-        <div className="bg-white p-8 lg:p-10 rounded-[2rem] shadow-[0_20px_40px_-15px_rgba(0,0,0,0.05)] border border-gray-100 relative">
-
-          <div className="flex p-1 bg-gray-50 rounded-xl mb-8">
-            <button type="button" onClick={() => { setIsLogin(true); setMessage(null); }} className={`flex-1 py-2.5 text-sm font-black rounded-lg transition-all ${isLogin ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>Login</button>
-            <button type="button" onClick={() => { setIsLogin(false); setMessage(null); }} className={`flex-1 py-2.5 text-sm font-black rounded-lg transition-all ${!isLogin ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}>Sign Up</button>
+      {/* Form */}
+      <main className="flex flex-1 items-center justify-center px-4 py-10 sm:px-8">
+        <div className="w-full max-w-[400px] animate-fade-in">
+          <div className="mb-8 flex items-center gap-2.5 lg:hidden">
+            <BrandMark size={28} />
+            <span className="text-[15px] font-semibold tracking-[-0.01em] text-fg">SmartConnect</span>
           </div>
 
-          <div className="mb-8">
-            <h2 className="text-2xl font-black text-gray-900 tracking-tight mb-2">{isLogin ? 'Sign In' : 'Create Account'}</h2>
-            <p className="text-sm text-gray-400 font-medium">
-              {isLogin
-                ? 'Enter your details to continue.'
-                : inviteToken
-                  ? 'Create your account to get started.'
-                  : 'Sign-up is by invitation only — open the invitation link you received.'}
+          {!isAdminMode && (
+            <div role="tablist" aria-label="Sign in or sign up" className="mb-7 grid grid-cols-2 gap-1 rounded-lg bg-surface-tertiary p-1">
+              <button type="button" role="tab" aria-selected={isLogin} onClick={() => { setIsLogin(true); setMessage(null); }} className={`rounded-md py-1.5 text-sm font-medium transition-colors ${isLogin ? 'bg-surface text-fg shadow-sm' : 'text-fg-muted hover:text-fg'}`}>Login</button>
+              <button type="button" role="tab" aria-selected={!isLogin} onClick={() => { setIsLogin(false); setMessage(null); }} className={`rounded-md py-1.5 text-sm font-medium transition-colors ${!isLogin ? 'bg-surface text-fg shadow-sm' : 'text-fg-muted hover:text-fg'}`}>Sign Up</button>
+            </div>
+          )}
+
+          <div className="mb-6">
+            {isAdminMode && (
+              <span className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand">
+                <Shield size={12} aria-hidden="true" /> Administrator
+              </span>
+            )}
+            <h2 className="text-[22px] font-semibold tracking-[-0.015em] text-fg">
+              {isAdminMode ? 'Workspace administration' : isLogin ? 'Sign In' : 'Create Account'}
+            </h2>
+            <p className="mt-1.5 text-sm text-fg-muted">
+              {isAdminMode
+                ? 'Sign in with your administrator account to continue.'
+                : isLogin
+                  ? 'Enter your details to continue.'
+                  : inviteToken
+                    ? 'Create your account to get started.'
+                    : 'Sign-up is by invitation only — open the invitation link you received.'}
             </p>
           </div>
 
           {message && (
-            <div className={`p-4 rounded-xl mb-6 text-sm font-bold flex items-center gap-2 ${message.type === 'error' ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
-              <div className={`w-1.5 h-1.5 rounded-full ${message.type === 'error' ? 'bg-red-600' : 'bg-green-600'}`} />
+            <div
+              role={message.type === 'error' ? 'alert' : 'status'}
+              className={`mb-5 flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm ${message.type === 'error' ? 'border-danger/25 bg-danger-soft text-danger' : 'border-success/25 bg-success-soft text-success'}`}
+            >
+              <span className={`mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ${message.type === 'error' ? 'bg-danger' : 'bg-success'}`} aria-hidden="true" />
               {message.text}
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-5">
-            {!isLogin && (
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {isSignup && (
               <div>
-                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Full Name</label>
-                <input required type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full bg-gray-50 border border-transparent focus:border-gray-200 focus:bg-white rounded-xl px-4 py-3 text-sm font-bold text-gray-900 outline-none transition-all placeholder:font-medium placeholder:text-gray-400" placeholder="Samarth Karale" />
+                <label htmlFor="auth-name" className="mb-1.5 block text-xs font-medium text-fg-muted">Full name</label>
+                <input id="auth-name" required type="text" autoComplete="name" value={username} onChange={(e) => setUsername(e.target.value)} className={fieldClass} placeholder="Samarth Karale" />
               </div>
             )}
 
             <div>
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Email Address</label>
+              <label htmlFor="auth-email" className="mb-1.5 block text-xs font-medium text-fg-muted">{isAdminMode ? 'Administrator e-mail' : 'Email address'}</label>
               <input
+                id="auth-email"
                 required
                 type="email"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                disabled={!isLogin && !!presetEmail}
-                readOnly={!isLogin && !!presetEmail}
-                className="w-full bg-gray-50 border border-transparent focus:border-gray-200 focus:bg-white rounded-xl px-4 py-3 text-sm font-bold text-gray-900 outline-none transition-all placeholder:font-medium placeholder:text-gray-400 disabled:bg-gray-100 disabled:text-gray-500 disabled:cursor-not-allowed"
-                placeholder="samarth@example.com"
+                disabled={isSignup && !!presetEmail}
+                readOnly={isSignup && !!presetEmail}
+                className={fieldClass}
+                placeholder="you@company.com"
               />
-              {!isLogin && !!presetEmail && (
-                <p className="text-[11px] text-gray-400 font-medium mt-1.5">This invite was sent to this address.</p>
-              )}
+              {isSignup && !!presetEmail && <p className="mt-1.5 text-xs text-fg-subtle">This invite was sent to this address.</p>}
             </div>
 
-            <div className="relative">
-              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1.5 block">Secret Password</label>
-              <input required type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} className="w-full bg-gray-50 border border-transparent focus:border-gray-200 focus:bg-white rounded-xl pl-4 pr-12 py-3 text-sm font-bold text-gray-900 outline-none transition-all placeholder:font-medium placeholder:text-gray-400" placeholder="••••••••" />
-              <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-[30px] text-gray-400 hover:text-gray-600 transition-colors">
-                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
-
-            {isLogin && (
-              <div className="flex justify-end mt-2">
-                <button type="button" onClick={handleForgotPassword} disabled={loading} className="text-xs font-bold text-[#350d36] hover:text-purple-900 transition-colors">
-                  Forgot Password?
+            <div>
+              <div className="mb-1.5 flex items-center justify-between">
+                <label htmlFor="auth-password" className="block text-xs font-medium text-fg-muted">Password</label>
+                {isLogin && !isAdminMode && (
+                  <button type="button" onClick={handleForgotPassword} disabled={loading} className="text-xs font-medium text-brand hover:text-brand-hover disabled:opacity-60">
+                    Forgot password?
+                  </button>
+                )}
+              </div>
+              <div className="relative">
+                <input
+                  id="auth-password"
+                  required
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete={isSignup ? 'new-password' : 'current-password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className={`${fieldClass} pr-10`}
+                  placeholder="••••••••"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  aria-pressed={showPassword}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-fg-subtle transition-colors hover:text-fg"
+                >
+                  {showPassword ? <EyeOff size={15} aria-hidden="true" /> : <Eye size={15} aria-hidden="true" />}
                 </button>
               </div>
-            )}
+            </div>
 
-            <button disabled={loading} type="submit" className="w-full py-3.5 bg-[#350d36] hover:bg-[#4a154b] text-white rounded-xl font-black text-sm flex items-center justify-center gap-2 transition-all active:scale-[0.98] mt-6 shadow-lg shadow-purple-900/20 disabled:opacity-70">
-              {loading ? <Loader2 size={18} className="animate-spin" /> : <>{isLogin ? 'Sign In' : 'Create Account'} <ArrowRight size={16} /></>}
+            <button
+              disabled={loading}
+              type="submit"
+              className="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-brand text-sm font-semibold text-on-brand transition-colors hover:bg-brand-hover active:scale-[0.99] disabled:opacity-70"
+            >
+              {loading ? <Loader2 size={16} className="animate-spin" aria-label="Working" /> : <>{isAdminMode || isLogin ? 'Sign In' : 'Create Account'} {isAdminMode ? <Lock size={14} aria-hidden="true" /> : <ArrowRight size={15} aria-hidden="true" />}</>}
             </button>
           </form>
 
-          {/* Admin Portal Entry Point */}
-          <div className="mt-8 flex justify-center items-center gap-3 border-t border-gray-100 pt-6">
-            <button type="button" onClick={toggleAdminMode} className="text-[10px] font-bold text-gray-400 hover:text-gray-800 uppercase tracking-widest transition-colors">
-              Access Admin Portal
+          <div className="mt-8 border-t border-line pt-5 text-center">
+            <button type="button" onClick={toggleAdminMode} className="text-xs font-medium text-fg-subtle transition-colors hover:text-fg">
+              {/* Labels avoid the words "Sign In": the submit button is the only control with that name. */}
+              {isAdminMode ? '← Use a regular account' : 'Administrator console'}
             </button>
           </div>
-
         </div>
-      </div>
+      </main>
     </div>
   );
 };

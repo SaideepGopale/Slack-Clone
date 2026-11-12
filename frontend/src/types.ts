@@ -25,7 +25,7 @@ export interface Workspace {
   // pins it to the top and gives it a distinct icon instead of an initial.
   isDefault?: boolean;
   // Server-computed (lib/policy); every action is re-checked by the backend.
-  capabilities?: { canManage: boolean; canManageInvitations?: boolean; canDelete?: boolean };
+  capabilities?: { canManage: boolean; canManageInvitations?: boolean; canDelete?: boolean; canCreateChannel?: boolean };
   // Batch 3 hierarchy (already returned by GET /api/workspaces).
   description?: string | null;
   isOwner?: boolean;

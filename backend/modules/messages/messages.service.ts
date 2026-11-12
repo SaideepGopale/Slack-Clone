@@ -1,3 +1,4 @@
+import { destroyFilesOfDeletedMessages } from '../../lib/attachments';
 import { groupReactions } from '../../lib/reactionSummary';
 import { prisma } from '../../lib/prisma';
 import { checkChannelContent, getChannelAccess, isMessageVisible, visibleHistoryFilter } from '../../sockets/channelAccess';
@@ -16,10 +17,25 @@ const messageInclude = {
     include: { user: { select: { id: true, username: true } } },
     orderBy: { createdAt: 'asc' as const },
   },
-  // Lets the frontend show "N replies" on a parent message without eagerly
-  // loading every reply's full content — those are fetched on demand, only
-  // when a thread is actually opened (see getThread below).
-  _count: { select: { replies: true } },
+};
+
+/**
+ * "N replies" on each message, without loading the replies' content (those
+ * are fetched on demand when a thread opens — getThread below).
+ *
+ * T.33: counted here for exactly the rows returned — one grouped query on
+ * the (parentId, createdAt) index. Prisma's `_count: { replies }` include on
+ * findMany generated `LEFT JOIN (SELECT parentId, COUNT(*) FROM "Message"
+ * GROUP BY parentId)` — an aggregate over the WHOLE message table on every
+ * page load. Under the 500-user load test that one query took 95% of all
+ * database time and grew with the table (T.33 §T.33.4). Same `_count` shape
+ * as before, so clients are unchanged.
+ */
+const withReplyCounts = async <T extends { id: string }>(rows: T[]): Promise<(T & { _count: { replies: number } })[]> => {
+  if (rows.length === 0) return [];
+  const counts = await prisma.message.groupBy({ by: ['parentId'], where: { parentId: { in: rows.map((r) => r.id) } }, _count: { _all: true } });
+  const byParent = new Map(counts.map((c) => [c.parentId, c._count._all]));
+  return rows.map((r) => ({ ...r, _count: { replies: byParent.get(r.id) ?? 0 } }));
 };
 
 // Reshape each message's raw Reaction rows into the same grouped
@@ -88,7 +104,7 @@ export const getChannelMessages = async (
       take: take + 1,
     });
     return {
-      messages: newer.slice(0, take).map(withGroupedReactions),
+      messages: (await withReplyCounts(newer.slice(0, take))).map(withGroupedReactions),
       nextCursor: null,
       hasMore: newer.length > take,
     };
@@ -127,7 +143,7 @@ export const getChannelMessages = async (
   return {
     // Reverse to ascending (oldest-first) order for direct rendering —
     // matches the pre-pagination endpoint's contract, just one page at a time.
-    messages: page.reverse().map(withGroupedReactions),
+    messages: (await withReplyCounts(page.reverse())).map(withGroupedReactions),
     nextCursor,
     hasMore,
   };
@@ -162,9 +178,10 @@ export const getThread = async (userId: string, messageId: string) => {
     orderBy: { createdAt: 'asc' },
   });
 
+  const [counted] = await withReplyCounts([parent]);
   return {
-    parent: withGroupedReactions(parent),
-    replies: replies.map(withGroupedReactions),
+    parent: withGroupedReactions(counted),
+    replies: (await withReplyCounts(replies)).map(withGroupedReactions),
   };
 };
 
@@ -179,7 +196,7 @@ export const searchChannelMessages = async (
     orderBy: { createdAt: 'desc' },
     take: 50,
   });
-  return messages.map(withGroupedReactions);
+  return (await withReplyCounts(messages)).map(withGroupedReactions);
 };
 
 // P2 Phase G: the conversation's pinned top-level messages, newest first,
@@ -192,7 +209,7 @@ export const getPinnedMessages = async (channelId: string, history: { historyFro
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: 50,
   });
-  return messages.map(withGroupedReactions);
+  return (await withReplyCounts(messages)).map(withGroupedReactions);
 };
 
 // Admin content-moderation search — across every non-DM channel, not just
@@ -228,7 +245,10 @@ export const adminDeleteMessage = async (messageId: string): Promise<AdminDelete
   if (!existing) return { status: 'not_found' };
   if (existing.channel.isDM) return { status: 'forbidden' };
 
+  const replies = await prisma.message.findMany({ where: { parentId: messageId }, select: { id: true, fileUrl: true } });
   await prisma.message.delete({ where: { id: messageId } });
+  // T.32 (audit M10): the deleted messages' stored files go too.
+  void destroyFilesOfDeletedMessages([existing, ...replies]).catch((err) => console.error('File cleanup after moderation delete failed:', err));
 
   return {
     status: 'deleted',
@@ -263,14 +283,13 @@ export const toggleReaction = async (userId: string, messageId: string, emoji: s
   const denial = await checkChannelContent(userId, access, 'react');
   if (denial) throw new HttpError(access.archived ? 409 : 403, denial);
 
-  const existing = await prisma.reaction.findUnique({
-    where: { userId_messageId_emoji: { userId, messageId, emoji } },
-  });
-
-  if (existing) {
-    await prisma.reaction.delete({ where: { id: existing.id } });
-  } else {
-    await prisma.reaction.create({ data: { userId, messageId, emoji } });
+  // T.32 (audit M13): race-safe toggle. Removing first is atomic (deleteMany
+  // on the unique key); only when nothing was removed is one added, with
+  // ON CONFLICT DO NOTHING — two concurrent toggles can no longer collide on
+  // the unique index and 500.
+  const removed = await prisma.reaction.deleteMany({ where: { userId, messageId, emoji } });
+  if (removed.count === 0) {
+    await prisma.reaction.createMany({ data: [{ userId, messageId, emoji }], skipDuplicates: true });
   }
 
   const reactions = await prisma.reaction.findMany({

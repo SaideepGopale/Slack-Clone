@@ -115,13 +115,13 @@ export const MessageModeration = () => {
             <div className="divide-y divide-gray-100">
               {results.map((m) => (
                 <div key={m.id} className="px-6 py-4 flex items-start gap-4 hover:bg-gray-50 transition-colors group">
-                  <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-500 to-violet-700 flex items-center justify-center text-white text-xs font-black uppercase shrink-0 mt-0.5">
+                  <div className="w-9 h-9 rounded-lg bg-accent-600 flex items-center justify-center text-white text-xs font-semibold uppercase shrink-0 mt-0.5">
                     {m.sender.username[0] || '?'}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap mb-1">
                       <span className="text-sm font-bold text-gray-900">{m.sender.username}</span>
-                      <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-gray-100 text-gray-600 border border-gray-200 flex items-center gap-1">
+                      <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-gray-100 text-gray-600 border border-gray-200 flex items-center gap-1">
                         <Hash size={10} /> {m.channel.name ?? 'unknown'}
                       </span>
                     </div>

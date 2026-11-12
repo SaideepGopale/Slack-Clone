@@ -51,7 +51,7 @@ export const PageFrame = ({ title, eyebrow, crumbs = [], badges, actions, childr
           <div className="min-w-0">
             {eyebrow && <p className="text-[11px] font-bold uppercase tracking-widest text-fg-subtle mb-1">{eyebrow}</p>}
             <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-black text-fg tracking-tight break-words">{title}</h1>
+              <h1 className="text-2xl font-semibold text-fg tracking-tight break-words">{title}</h1>
               {badges}
             </div>
           </div>
@@ -69,7 +69,7 @@ export const Section = ({ title, description, children, tone = 'default' }: { ti
     aria-label={title}
     className={`rounded-2xl border p-4 md:p-6 ${tone === 'danger' ? 'border-danger/30 bg-danger-soft/40' : 'border-line bg-surface'}`}
   >
-    <h2 className={`text-base font-black tracking-tight ${tone === 'danger' ? 'text-danger' : 'text-fg'}`}>{title}</h2>
+    <h2 className={`text-base font-semibold tracking-tight ${tone === 'danger' ? 'text-danger' : 'text-fg'}`}>{title}</h2>
     {description && <p className="text-sm text-fg-muted mt-1">{description}</p>}
     <div className="mt-4">{children}</div>
   </section>

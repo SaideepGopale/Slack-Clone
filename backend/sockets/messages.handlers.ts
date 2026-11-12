@@ -1,3 +1,4 @@
+import { destroyFilesOfDeletedMessages, parseAttachmentPath } from '../lib/attachments';
 import { Prisma } from '@prisma/client';
 import { Server } from 'socket.io';
 import { asStoredPoll, isUuid, normalizeContent, normalizeMessageInput } from '../lib/messageInput';
@@ -7,6 +8,9 @@ import { toAck } from './ack';
 import { CHANNEL_CONTENT_DENIALS, ChannelContentAction } from '../lib/policy';
 import { ChannelAccess, checkChannelContent, ensureChannelAccess, getChannelAccess, isMessageVisible, rejectUnauthorized } from './channelAccess';
 import { AuthenticatedSocket } from './types';
+
+const ATTACHMENT_UNAVAILABLE = 'This file is no longer available to attach. Upload it again.';
+class AttachmentUnavailableError extends Error {}
 
 // Shape broadcast for new/updated messages. Deliberately does NOT include the
 // parent message: previously `parent` (with full content) rode along on every
@@ -25,15 +29,34 @@ const isUniqueViolation = (err: unknown) =>
   err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
 
 /**
- * Delivers an event to every socket subscribed to `channelId` whose user is
- * still an ACTIVE member of both the channel and its workspace; any other
- * socket in the room is evicted from it (and from its thread rooms).
+ * Delivers an event to every connected member of `channelId` who may still
+ * read it: an ACTIVE account, a member of the channel and of its workspace,
+ * and — for a channel of a PRIVATE project — a member of that project (the
+ * same rules that subscribe a socket to the channel at connect time,
+ * channelAccess.subscribeToMemberChannels).
  *
- * Cost is bounded by the room's size (two indexed `IN` queries), not by the
- * size of the workspace — the previous implementation loaded every member of
- * the workspace and scanned every connected socket for each message (RT-06).
- * Single-process assumption: reads the local adapter's room registry.
+ * T.33: the audience is computed from the database and the event is sent to
+ * those members' personal `user:<id>` rooms in one broadcast. No socket list
+ * is fetched on the send path — with several instances, fetchSockets() is a
+ * round trip through Redis to every instance per message, which the load
+ * test showed to dominate send latency (T.33 §T.33.4). A socket whose
+ * membership is gone receives nothing from this path even if it is still
+ * subscribed; stale channel subscriptions are swept off the send path, at
+ * most once per channel every EVICT_EVERY_MS (revocation removes them
+ * immediately in the normal flows — sockets/revocation.ts).
  */
+const EVICT_EVERY_MS = 30_000;
+const lastEviction = new Map<string, number>();
+
+const evictStaleSubscriptions = async (io: Server, channelId: string, allowed: Set<string>) => {
+  for (const roomSocket of await io.in(channelId).fetchSockets()) {
+    const userId = roomSocket.data?.user?.id;
+    if (typeof userId === 'string' && allowed.has(userId)) continue;
+    const rooms = [channelId, ...Array.from(roomSocket.rooms).filter((room) => room.startsWith('thread_'))];
+    io.in(roomSocket.id).socketsLeave(rooms);
+  }
+};
+
 const emitToVerifiedMembers = async (
   io: Server,
   channelId: string,
@@ -42,39 +65,33 @@ const emitToVerifiedMembers = async (
   payload: unknown,
   // P3 (FA-RT-05): the message's creation time. Members whose history window
   // starts later (e.g. added to a group DM without history) don't receive
-  // events about it — they stay in the room, they just aren't told.
+  // events about it — they stay subscribed, they just aren't told.
   visibleAt?: Date
 ) => {
-  const socketIds = io.sockets.adapter.rooms.get(channelId);
-  if (!socketIds || socketIds.size === 0) return;
+  const channel = await prisma.channel.findUnique({ where: { id: channelId }, select: { project: { select: { id: true, visibility: true } } } });
+  if (!channel) return;
+  const privateProject = channel.project?.visibility === 'PRIVATE' ? channel.project.id : null;
+  const members = await prisma.channelMember.findMany({
+    where: {
+      channelId,
+      user: {
+        status: 'ACTIVE',
+        workspaces: { some: { workspaceId } },
+        ...(privateProject ? { projectMemberships: { some: { projectId: privateProject } } } : {}),
+      },
+    },
+    select: { userId: true, historyFrom: true },
+  });
+  const targets = members.filter((m) => !(visibleAt && m.historyFrom && m.historyFrom > visibleAt)).map((m) => `user:${m.userId}`);
+  if (targets.length > 0) io.to(targets).emit(event, payload);
 
-  const sockets = Array.from(socketIds)
-    .map((id) => io.sockets.sockets.get(id) as AuthenticatedSocket | undefined)
-    .filter((s): s is AuthenticatedSocket => !!s?.user?.id);
-  const userIds = Array.from(new Set(sockets.map((s) => s.user.id)));
-
-  const [workspaceMembers, channelMembers] = await Promise.all([
-    prisma.workspaceMember.findMany({
-      where: { workspaceId, userId: { in: userIds }, user: { status: 'ACTIVE' } },
-      select: { userId: true },
-    }),
-    prisma.channelMember.findMany({ where: { channelId, userId: { in: userIds } }, select: { userId: true, historyFrom: true } }),
-  ]);
-  const inWorkspace = new Set(workspaceMembers.map((m) => m.userId));
-  const allowed = new Set(channelMembers.map((m) => m.userId).filter((id) => inWorkspace.has(id)));
-  const outsideWindow = new Set(
-    visibleAt ? channelMembers.filter((m) => m.historyFrom && m.historyFrom > visibleAt).map((m) => m.userId) : []
-  );
-
-  for (const roomSocket of sockets) {
-    if (allowed.has(roomSocket.user.id)) {
-      if (!outsideWindow.has(roomSocket.user.id)) roomSocket.emit(event, payload);
-    } else {
-      roomSocket.leave(channelId);
-      for (const room of roomSocket.rooms) {
-        if (room.startsWith('thread_')) roomSocket.leave(room);
-      }
-    }
+  const now = Date.now();
+  if (now - (lastEviction.get(channelId) ?? 0) >= EVICT_EVERY_MS) {
+    lastEviction.set(channelId, now);
+    if (lastEviction.size > 10_000) lastEviction.clear();
+    evictStaleSubscriptions(io, channelId, new Set(members.map((m) => m.userId))).catch((err) =>
+      console.error('stale subscription sweep failed:', err instanceof Error ? err.message : err)
+    );
   }
 };
 
@@ -230,24 +247,49 @@ export const registerMessageHandlers = (io: Server, socket: AuthenticatedSocket)
         if (existing) return ack({ ok: true, duplicate: true, message: existing });
       }
 
+      // T.32 (audit H3/M9): a private upload can be attached only by the
+      // person who uploaded it, and only once; its stored name and type are
+      // authoritative (not what the client claims).
+      const attachmentId = parseAttachmentPath(input.fileUrl);
+      let attachment: { id: string; originalName: string; mimeType: string } | null = null;
+      if (attachmentId) {
+        attachment = await prisma.attachment.findFirst({
+          // T.33: a file already attached to a task cannot also be sent.
+          where: { id: attachmentId, uploaderId: user.id, messageId: null, taskId: null },
+          select: { id: true, originalName: true, mimeType: true },
+        });
+        if (!attachment) return ack({ ok: false, error: ATTACHMENT_UNAVAILABLE });
+      }
+
       let msg;
       try {
-        msg = await prisma.message.create({
-          data: {
-            content: input.content,
-            fileUrl: input.fileUrl,
-            fileName: input.fileName,
-            fileType: input.fileType,
-            pollData: input.pollData ? (input.pollData as unknown as Prisma.InputJsonValue) : undefined,
-            channelId: input.channelId,
-            workspaceId: channel.workspaceId,
-            senderId: user.id,
-            parentId: input.parentId,
-            clientId: input.clientId,
-          },
-          include: messageInclude,
+        msg = await prisma.$transaction(async (tx) => {
+          const created = await tx.message.create({
+            data: {
+              content: input.content,
+              fileUrl: input.fileUrl,
+              fileName: attachment?.originalName ?? input.fileName,
+              fileType: attachment?.mimeType ?? input.fileType,
+              pollData: input.pollData ? (input.pollData as unknown as Prisma.InputJsonValue) : undefined,
+              channelId: input.channelId,
+              workspaceId: channel.workspaceId,
+              senderId: user.id,
+              parentId: input.parentId,
+              clientId: input.clientId,
+            },
+            include: messageInclude,
+          });
+          if (attachment) {
+            const bound = await tx.attachment.updateMany({
+              where: { id: attachment.id, uploaderId: user.id, messageId: null, taskId: null },
+              data: { messageId: created.id },
+            });
+            if (bound.count !== 1) throw new AttachmentUnavailableError();
+          }
+          return created;
         });
       } catch (err) {
+        if (err instanceof AttachmentUnavailableError) return ack({ ok: false, error: ATTACHMENT_UNAVAILABLE });
         // Two concurrent retries with the same clientId: the loser returns
         // the winner's row rather than failing or duplicating.
         if (input.clientId && isUniqueViolation(err)) {
@@ -371,7 +413,11 @@ export const registerMessageHandlers = (io: Server, socket: AuthenticatedSocket)
       const deleteDenial = await contentDenial(existing.channelId, 'delete');
       if (deleteDenial) return ack({ ok: false, error: deleteDenial });
 
+      // Thread replies go with their parent (cascade): collect their files first.
+      const replies = await prisma.message.findMany({ where: { parentId: existing.id }, select: { id: true, fileUrl: true } });
       await prisma.message.delete({ where: { id: existing.id } });
+      // T.32 (audit M10): the stored files of deleted messages are destroyed too.
+      void destroyFilesOfDeletedMessages([existing, ...replies]).catch((err) => console.error('File cleanup after delete failed:', err));
       io.to(existing.channelId).emit('message:deleted', existing.id);
       if (existing.parentId) {
         io.to(threadRoom(existing.parentId)).emit('thread:message_deleted', {

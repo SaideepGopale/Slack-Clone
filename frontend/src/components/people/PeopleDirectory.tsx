@@ -3,6 +3,7 @@ import { Loader2, Search } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWorkspaces } from '../../pages/workspace/WorkspacesProvider';
 import { WorkspaceMember } from '../../types';
+import { AddWorkspaceMemberButton } from '../workspaceAdmin/AddWorkspaceMemberButton';
 import { ProfileModal } from './ProfileModal';
 
 interface PeopleDirectoryProps {
@@ -38,6 +39,8 @@ export const PeopleDirectory = ({ workspaceId, currentUserId, onMessage }: Peopl
     canManage: !!workspace && !workspace.isDefault && !!workspace.capabilities?.canManage,
     // May remove admins too: the workspace owner or an organization OWNER/ADMIN.
     isOwner: !!workspace?.isOwner || workspace?.organizationRole === 'OWNER' || workspace?.organizationRole === 'ADMIN',
+    // T.36: may add members here (the same right as Workspace settings → Members).
+    canAddMembers: !!workspace && !workspace.isDefault && !!workspace.capabilities?.canManageInvitations,
   };
   const requestRef = useRef(0);
 
@@ -70,17 +73,27 @@ export const PeopleDirectory = ({ workspaceId, currentUserId, onMessage }: Peopl
 
   return (
     <div>
-      <label className="relative block max-w-xl mb-6">
-        <span className="sr-only">Search people</span>
-        <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true" />
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search people by name or email"
-          className="w-full bg-white border border-gray-200 rounded-xl py-2.5 pl-10 pr-4 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
-        />
-      </label>
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <label className="relative block max-w-xl flex-1">
+          <span className="sr-only">Search people</span>
+          <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search people by name or email"
+            className="w-full bg-white border border-gray-200 rounded-xl py-2.5 pl-10 pr-4 text-sm outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-100"
+          />
+        </label>
+        {workspace && (
+          <AddWorkspaceMemberButton
+            workspaceId={workspaceId}
+            workspaceName={workspace.name}
+            canManageInvitations={viewer.canAddMembers}
+            onChanged={() => load(null)}
+          />
+        )}
+      </div>
 
       {error && (
         <p className="text-sm text-red-600 mb-4" role="alert">
@@ -101,7 +114,7 @@ export const PeopleDirectory = ({ workspaceId, currentUserId, onMessage }: Peopl
                 aria-label={`View profile of ${m.username}`}
               >
                 <span className="relative shrink-0">
-                  <span className="w-11 h-11 rounded-xl bg-gradient-to-br from-violet-500 to-violet-700 text-white flex items-center justify-center font-bold uppercase">
+                  <span className="w-11 h-11 rounded-xl bg-accent-600 text-white flex items-center justify-center font-bold uppercase">
                     {m.username[0]}
                   </span>
                   <span

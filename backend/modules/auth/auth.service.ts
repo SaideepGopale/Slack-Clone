@@ -2,8 +2,11 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { Prisma, Role } from '@prisma/client';
 import { APP_URL, JWT_SECRET } from '../../config/env';
+import { logAuditEvent } from '../../lib/auditLog';
 import { isValidEmail } from '../../lib/email';
+import { passwordProblem } from '../../lib/passwordPolicy';
 import { prisma } from '../../lib/prisma';
+import { issueSession, revokeAllSessions } from '../../lib/sessions';
 import { generateOtp, hashOtp, MAX_OTP_ATTEMPTS, OTP_TTL_MS, verifyOtp as verifyOtpCode } from '../../lib/otp';
 import { hasLiveInvitation, hasSignupConflict, lockSignupEmail, rethrowAsDuplicateAccount } from '../../lib/signupEmail';
 import { INVITE_ONLY_MESSAGE } from '../../middleware/inviteOnlySignup.middleware';
@@ -23,8 +26,39 @@ class HttpError extends Error {
 // decision itself. Every admin-gated route re-checks the database via
 // requireAdmin (middleware/admin.middleware.ts), since a role change or a ban
 // must take effect before a 7-day-old token naturally expires.
-const signToken = (payload: { id: string; username: string; role: Role }) =>
-  jwt.sign(payload, JWT_SECRET as string, { expiresIn: '7d' });
+//
+// T.32 (audit H1): login tokens are issued with a server-side session
+// (lib/sessions.ts issueSession) so they can be revoked before they expire.
+type SessionMeta = { userAgent?: string | null };
+
+const isFilledString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+const isMissing = (value: unknown) => value === undefined || value === null || value === '';
+
+/**
+ * Sign-up field rules shared by both sign-up paths. T.32 (audit M3): values
+ * of the wrong type are a 400 with the same messages as before (an e-mail
+ * that is not a string is an invalid e-mail), never a 500 from Prisma/bcrypt.
+ */
+const validateSignupFields = (username: unknown, email: unknown, password: unknown) => {
+  if (isMissing(username) || isMissing(email) || isMissing(password)) {
+    throw new HttpError(400, 'username, email and password are required');
+  }
+  if (typeof email !== 'string' || !isValidEmail(email)) throw new HttpError(400, 'Invalid email format');
+  if (typeof username !== 'string' || username.trim().length === 0) throw new HttpError(400, 'Username must be text.');
+  if (username.length > 64) throw new HttpError(400, 'Username must be at most 64 characters long');
+  const problem = passwordProblem(password);
+  if (problem) throw new HttpError(400, problem);
+  return { username, email, password: password as string };
+};
+
+// T.32 (audit M4): login runs bcrypt even for an unknown address, so response
+// time does not reveal which addresses have accounts. Computed once, lazily.
+let timingEqualiserHash: Promise<string> | null = null;
+const equaliseLoginTiming = (password: string) => {
+  timingEqualiserHash ??= bcrypt.hash('smartconnect-timing-equaliser', 12);
+  return timingEqualiserHash.then((hash) => bcrypt.compare(password, hash)).then(() => false);
+};
 
 // E-mail format: isValidEmail (lib/email.ts) caps the length before the
 // pattern runs — the pattern alone could block the event loop (FA-SEC-02).
@@ -62,7 +96,7 @@ const joinGeneralChannel = async (tx: Prisma.TransactionClient, userId: string):
     // This deliberately does NOT auto-create it if missing — that's an
     // ops/seeding issue, not something a new account should paper over by
     // spawning a stray channel.
-    console.error('No "General" channel found in the default workspace — run reset-to-general-channel.ts to seed it.');
+    console.error('No "General" channel found in the default workspace — the workspace setup is incomplete (every workspace is created with one).');
     return defaultWorkspace.id;
   }
   await tx.channelMember.upsert({
@@ -83,16 +117,8 @@ const joinGeneralChannel = async (tx: Prisma.TransactionClient, userId: string):
  * now. Same validation/hashing/default-workspace-join as the OTP path's
  * second step, minus the email round-trip.
  */
-export const signup = async (username: string, email: string, password: string) => {
-  if (!username || !email || !password) {
-    throw new HttpError(400, 'username, email and password are required');
-  }
-  if (!isValidEmail(email)) {
-    throw new HttpError(400, 'Invalid email format');
-  }
-  if (password.length < 6) {
-    throw new HttpError(400, 'Password must be at least 6 characters long');
-  }
+export const signup = async (rawUsername: unknown, rawEmail: unknown, rawPassword: unknown, meta: SessionMeta = {}) => {
+  const { username, email, password } = validateSignupFields(rawUsername, rawEmail, rawPassword);
 
   // Stage 6A (AUTH-1): the address matches in any letter case (lib/signupEmail.ts).
   if (await hasSignupConflict(prisma, email, username)) {
@@ -115,7 +141,7 @@ export const signup = async (username: string, email: string, password: string) 
     return { ...newUser, lastActiveWorkspaceId: defaultWorkspaceId };
   }).catch(rethrowAsDuplicateAccount('A user with this email or username already exists'));
 
-  const token = signToken({ id: user.id, username: user.username, role: user.role });
+  const token = await issueSession({ id: user.id, username: user.username, role: user.role }, meta);
   return {
     token,
     user: {
@@ -134,16 +160,8 @@ export const signup = async (username: string, email: string, password: string) 
  * `email` is `@unique` on that table, so this doubles as the "resend" path:
  * requesting again just replaces the pending code/attempts/expiry.
  */
-export const requestSignupOtp = async (username: string, email: string, password: string) => {
-  if (!username || !email || !password) {
-    throw new HttpError(400, 'username, email and password are required');
-  }
-  if (!isValidEmail(email)) {
-    throw new HttpError(400, 'Invalid email format');
-  }
-  if (password.length < 6) {
-    throw new HttpError(400, 'Password must be at least 6 characters long');
-  }
+export const requestSignupOtp = async (rawUsername: unknown, rawEmail: unknown, rawPassword: unknown) => {
+  const { username, email, password } = validateSignupFields(rawUsername, rawEmail, rawPassword);
 
   // Stage 6A (AUTH-1): any letter case. Early answer only — verifySignupOtp
   // re-checks under the per-address lock when it creates the account.
@@ -175,8 +193,8 @@ export const requestSignupOtp = async (username: string, email: string, password
  * and only on success actually creates the `User` row, joins General, and
  * removes the OTPVerification record — all inside one transaction.
  */
-export const verifySignupOtp = async (email: string, code: string) => {
-  if (!email || !code) {
+export const verifySignupOtp = async (email: unknown, code: unknown, meta: SessionMeta = {}) => {
+  if (!isFilledString(email) || !isFilledString(code)) {
     throw new HttpError(400, 'email and code are required');
   }
 
@@ -231,7 +249,7 @@ export const verifySignupOtp = async (email: string, code: string) => {
     return { ...newUser, lastActiveWorkspaceId: defaultWorkspaceId };
   }).catch(rethrowAsDuplicateAccount('A user with this email or username already exists.'));
 
-  const token = signToken({ id: user.id, username: user.username, role: user.role });
+  const token = await issueSession({ id: user.id, username: user.username, role: user.role }, meta);
   return {
     token,
     user: {
@@ -244,20 +262,21 @@ export const verifySignupOtp = async (email: string, code: string) => {
   };
 };
 
-export const login = async (email: string, password: string) => {
-  if (!email || !password) {
+export const login = async (email: unknown, password: unknown, meta: SessionMeta = {}) => {
+  if (!isFilledString(email) || !isFilledString(password)) {
     throw new HttpError(400, 'email and password are required');
   }
 
   const user = await prisma.user.findUnique({ where: { email } });
-  if (!user || !(await bcrypt.compare(password, user.password))) {
+  const passwordOk = user ? await bcrypt.compare(password, user.password) : await equaliseLoginTiming(password);
+  if (!user || !passwordOk) {
     throw new HttpError(401, 'Invalid credentials');
   }
   if (user.status !== 'ACTIVE') {
     throw new HttpError(403, user.status === 'BANNED' ? 'This account has been banned.' : 'This account has been suspended.');
   }
 
-  const token = signToken({ id: user.id, username: user.username, role: user.role });
+  const token = await issueSession({ id: user.id, username: user.username, role: user.role }, meta);
   return {
     token,
     user: {
@@ -292,38 +311,79 @@ export const issuePasswordReset = async (user: { id: string; email: string; pass
   await sendResetPasswordEmail(user.email, resetLink);
 };
 
-export const forgotPassword = async (email: string) => {
-  if (!email) throw new HttpError(400, 'Email is required');
+// T.32 (audit M1): one answer whether or not the address has an account, so
+// this endpoint cannot be used to discover accounts (it is rate limited too).
+const FORGOT_PASSWORD_REPLY = { message: 'If an account exists for that address, a password reset link has been sent.' };
+
+export const forgotPassword = async (email: unknown) => {
+  if (!isFilledString(email)) throw new HttpError(400, 'Email is required');
+  if (!isValidEmail(email)) return FORGOT_PASSWORD_REPLY;
 
   const user = await prisma.user.findUnique({ where: { email } });
-  if (!user) {
-    // Don't reveal whether the account exists.
-    return { message: 'If an account exists, a password reset link has been sent.' };
-  }
+  // A reset never grants access by itself: a suspended or banned account
+  // still cannot sign in afterwards (tests/stage2-team-leads.test.ts).
+  if (!user) return FORGOT_PASSWORD_REPLY;
 
   await issuePasswordReset(user);
-  return { message: 'Reset email sent successfully' };
+  return FORGOT_PASSWORD_REPLY;
 };
 
-export const resetPassword = async (id: string, token: string, newPassword: string) => {
-  if (!id || !token || !newPassword) {
+const INVALID_RESET_LINK = 'Invalid or expired reset link. Please request a new one.';
+
+/**
+ * Completes a reset. T.32: the same 400 for an unknown account as for a bad
+ * token (no account discovery), the shared password policy, and — audit H1 —
+ * every existing session of the account is ended, so a stolen token or an
+ * old device does not survive the reset.
+ */
+export const resetPassword = async (id: unknown, token: unknown, newPassword: unknown) => {
+  if (!isFilledString(id) || !isFilledString(token) || newPassword === undefined || newPassword === null || newPassword === '') {
     throw new HttpError(400, 'Missing required fields');
   }
+  const problem = passwordProblem(newPassword);
+  if (problem) throw new HttpError(400, problem);
 
-  const user = await prisma.user.findUnique({ where: { id } });
-  if (!user) throw new HttpError(404, 'User not found');
+  const user = await prisma.user.findUnique({ where: { id } }).catch(() => null);
+  if (!user) throw new HttpError(400, INVALID_RESET_LINK);
 
   const secret = JWT_SECRET + user.password;
   try {
-    jwt.verify(token, secret);
+    jwt.verify(token, secret, { algorithms: ['HS256'] });
   } catch {
-    throw new HttpError(400, 'Invalid or expired reset token. Please request a new one.');
+    throw new HttpError(400, INVALID_RESET_LINK);
   }
 
-  const hashedPassword = await bcrypt.hash(newPassword, 12);
+  const hashedPassword = await bcrypt.hash(newPassword as string, 12);
   await prisma.user.update({ where: { id: user.id }, data: { password: hashedPassword } });
+  const ended = await revokeAllSessions(user.id);
+  await logAuditEvent(user.id, 'RESET_PASSWORD', 'USER', user.id, `Reset their password with an e-mailed link (${ended} session(s) ended)`);
 
   return { message: 'Password updated successfully! You can now log in.' };
+};
+
+/**
+ * POST /api/auth/change-password — a signed-in user changes their own
+ * password. The current password is required; every OTHER session of the
+ * account is ended (this one stays signed in).
+ */
+export const changePassword = async (userId: string, sid: string | undefined, currentPassword: unknown, newPassword: unknown) => {
+  if (!isFilledString(currentPassword) || newPassword === undefined || newPassword === null || newPassword === '') {
+    throw new HttpError(400, 'currentPassword and newPassword are required');
+  }
+  const problem = passwordProblem(newPassword);
+  if (problem) throw new HttpError(400, problem);
+  if (currentPassword === newPassword) throw new HttpError(400, 'Choose a password different from your current one.');
+
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, password: true } });
+  if (!user) throw new HttpError(404, 'User not found');
+  if (!(await bcrypt.compare(currentPassword, user.password))) {
+    throw new HttpError(400, 'Your current password is incorrect.');
+  }
+
+  await prisma.user.update({ where: { id: user.id }, data: { password: await bcrypt.hash(newPassword as string, 12) } });
+  const ended = await revokeAllSessions(user.id, { exceptSid: sid });
+  await logAuditEvent(user.id, 'CHANGE_PASSWORD', 'USER', user.id, `Changed their password (${ended} other session(s) ended)`);
+  return { message: 'Password changed. Other devices have been signed out.', endedSessions: ended };
 };
 
 export { HttpError };

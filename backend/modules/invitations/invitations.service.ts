@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { APP_URL, JWT_SECRET } from '../../config/env';
 import { isValidEmail } from '../../lib/email';
 import { prisma } from '../../lib/prisma';
+import { emailDeliveryConfigured } from '../../lib/emailDelivery';
 import { sendInviteEmail } from '../../utils/mailer';
 import { logAuditEvent } from '../../lib/auditLog';
 import { HttpError } from '../../lib/httpError';
@@ -108,6 +109,24 @@ export const createInvitation = async (email: unknown, inviterId: string, worksp
   await logAuditEvent(inviterId, 'CREATE_INVITATION', 'WORKSPACE', workspaceKey, `Invited ${normalized}`);
   const inviteLink = `${APP_URL}/invite/${invitation.token}`;
 
+  // T.36: with no e-mail provider configured, say so — never "sent". The
+  // invitation still exists (it lets this address sign up), and the Team
+  // Lead's no-e-mail path (Members → Add team member) is the way to add
+  // someone right now.
+  if (!emailDeliveryConfigured()) {
+    return {
+      status: 201,
+      body: {
+        success: true,
+        emailSent: false,
+        emailUnavailable: true,
+        message: 'Invitation saved, but no e-mail was sent: e-mail delivery is not configured on this server.',
+        token: invitation.token,
+        id: invitation.id,
+      },
+    };
+  }
+
   try {
     await sendInviteEmail(normalized, inviteLink, workspace.name);
   } catch (emailErr: any) {
@@ -116,6 +135,7 @@ export const createInvitation = async (email: unknown, inviterId: string, worksp
       status: 201,
       body: {
         success: true,
+        emailSent: false,
         message: 'Invitation created but email failed to send',
         token: invitation.token,
         id: invitation.id,
@@ -126,7 +146,7 @@ export const createInvitation = async (email: unknown, inviterId: string, worksp
 
   return {
     status: 201,
-    body: { success: true, message: 'Invite sent successfully', token: invitation.token, id: invitation.id },
+    body: { success: true, emailSent: true, message: 'Invite sent successfully', token: invitation.token, id: invitation.id },
   };
 };
 

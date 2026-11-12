@@ -120,7 +120,8 @@ test('invitations, join requests, live role-based controls and membership manage
   await a.getByLabel('E-mail address').fill(inviteeEmail);
   const [created] = await Promise.all([
     a.waitForResponse((r) => r.url().endsWith(`/api/workspaces/${workspaceId}/invites`) && r.request().method() === 'POST'),
-    a.getByRole('button', { name: 'Send invite' }).click(),
+    // T.36: labelled "Create invitation" when the server cannot send e-mail (as in E2E).
+    a.getByRole('button', { name: /^(Send invite|Create invitation)$/ }).click(),
   ]);
   const createdBody = await created.json();
   expect(typeof createdBody.token).toBe('string');

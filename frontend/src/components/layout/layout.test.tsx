@@ -3,7 +3,7 @@ import axios from 'axios';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageFocusTarget, onMessageFocus } from '../../lib/messageFocus';
-import { ProjectShell, ProjectsShell } from '../../pages/workspace/shells/RouteShells';
+import { ProjectsPage } from '../../pages/projects/ProjectsPage';
 import { ChannelSearch } from './ChannelSearch';
 import { Header } from './Header';
 import { MoreView } from './MoreView';
@@ -123,24 +123,21 @@ describe('placeholders and route shells', () => {
     expect(onViewChange).toHaveBeenCalledWith('directory');
   });
 
-  // F2 replaced the settings/organization shells with real pages (tested in
-  // components/workspaceAdmin and pages/organization); F3's remain.
-  it('F3 route shells render an honest not-available state', async () => {
-    for (const [path, element, title] of [
-      ['/ws/projects', <ProjectsShell />, 'Projects'],
-      ['/ws/projects/p1', <ProjectShell />, 'Project'],
-    ] as const) {
-      const { unmount } = render(
-        <MemoryRouter initialEntries={[path]}>
-          <Routes>
-            <Route path="/:workspaceId/*" element={element} />
-            <Route path="/:workspaceId/projects/:projectId" element={element} />
-          </Routes>
-        </MemoryRouter>
-      );
-      await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: title })).toBeInTheDocument());
-      expect(screen.getByText(`${title} isn't available yet`)).toBeInTheDocument();
-      unmount();
-    }
+  // T.33: the F1 project route shells became real pages (projects list, project
+  // board, My Tasks — tested in pages/projects). The list renders its real
+  // empty state from the API instead of a "not available yet" placeholder.
+  it('the Projects route renders the real projects page', async () => {
+    api.get.mockResolvedValue({ data: { projects: [], nextCursor: null } });
+    render(
+      <MemoryRouter initialEntries={['/ws/projects']}>
+        <Routes>
+          <Route path="/:workspaceId/projects" element={<ProjectsPage />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('heading', { level: 1, name: 'Projects' })).toBeInTheDocument();
+    expect(await screen.findByText('No projects yet')).toBeInTheDocument();
+    expect(api.get).toHaveBeenCalledWith('/api/workspaces/ws/projects', { params: { status: 'active' } });
+    expect(screen.queryByText(/isn't available yet/)).not.toBeInTheDocument();
   });
 });

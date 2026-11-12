@@ -14,6 +14,8 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 interface InvitationsPanelProps {
   workspaceId: string;
+  /** T.36: false when the server has no e-mail provider (from workspace settings). */
+  emailInvitationsAvailable?: boolean;
   /** Reports the number of PENDING invitations (Directory tab badge). */
   onPendingCountChange?: (count: number) => void;
 }
@@ -25,7 +27,7 @@ interface InvitationsPanelProps {
  * component (lib/api/invitations.ts drops them). The backend emits no events
  * for invitations, so the list refreshes after every action and on focus.
  */
-export const InvitationsPanel = ({ workspaceId, onPendingCountChange }: InvitationsPanelProps) => {
+export const InvitationsPanel = ({ workspaceId, emailInvitationsAvailable = true, onPendingCountChange }: InvitationsPanelProps) => {
   const invitations = useApiQuery(() => invitationsApi.listWorkspaceInvitations(workspaceId), [workspaceId], { refetchOnFocus: true });
   const [filter, setFilter] = useState<'all' | InvitationState>('all');
   const [email, setEmail] = useState('');
@@ -61,6 +63,7 @@ export const InvitationsPanel = ({ workspaceId, onPendingCountChange }: Invitati
       const result = await invitationsApi.inviteByEmail(workspaceId, value);
       setEmail('');
       if (result.emailSent) toast.success(`Invitation sent to ${value}.`);
+      else if (result.emailUnavailable) toast.warning(`Invitation saved for ${value}. No e-mail was sent — e-mail delivery isn't configured on this server.`);
       else toast.warning(`Invitation created for ${value}, but the e-mail couldn't be delivered. Share an invite link instead.`);
       await invitations.reload({ silent: true });
     } catch (err) {
@@ -137,12 +140,19 @@ export const InvitationsPanel = ({ workspaceId, onPendingCountChange }: Invitati
     <div className="space-y-6">
       {dialog}
       <Section title="Invite by e-mail" description="They'll join as a member. Invitations expire after 14 days and work only for the invited address.">
+        {!emailInvitationsAvailable && (
+          <p role="note" className="mb-3 rounded-lg border border-warning/25 bg-warning-soft px-3 py-2 text-sm text-warning">
+            E-mail invitations are unavailable: e-mail delivery isn't configured on this server, so no invitation e-mail can be sent. To add someone
+            now, go to Members and use <strong>Add team member</strong> (a new account with a one-time activation link — no e-mail) or{' '}
+            <strong>Add people</strong> (existing accounts).
+          </p>
+        )}
         <form onSubmit={sendInvite} className="flex flex-col gap-2 sm:flex-row sm:items-start" noValidate>
           <Field label="E-mail address" error={emailError} className="flex-1">
             <TextInput type="email" autoComplete="off" placeholder="name@company.com" value={email} onChange={(e) => setEmail(e.target.value)} />
           </Field>
           <Button type="submit" loading={sending} disabled={!email.trim()} icon={<Send size={14} aria-hidden="true" />} className="sm:mt-6">
-            Send invite
+            {emailInvitationsAvailable ? 'Send invite' : 'Create invitation'}
           </Button>
         </form>
       </Section>

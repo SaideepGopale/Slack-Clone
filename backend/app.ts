@@ -6,6 +6,7 @@ import { errorHandler } from './middleware/error.middleware';
 import { revokeSocketsOnUserDeletion } from './middleware/socketRevocation.middleware';
 import adminRoutes from './modules/admin/admin.routes';
 import authRoutes from './modules/auth/auth.routes';
+import callsRoutes from './modules/calls/calls.routes';
 import channelsRoutes from './modules/channels/channels.routes';
 import invitationsRoutes from './modules/invitations/invitations.routes';
 import messagesRoutes, { messageActionsRouter } from './modules/messages/messages.routes';
@@ -20,8 +21,11 @@ import { accountActivationRoutes, teamManagementRoutes, teamMemberRoutes } from 
 import { INVITE_ONLY_SIGNUP_PATHS, requireSignupInvitation, signupGateLimiter } from './middleware/inviteOnlySignup.middleware';
 import { companyOverviewRoutes } from './modules/companyOverview/companyOverview.routes';
 import uploadRoutes, { handleUploadErrors } from './modules/uploads/message.routes';
-import { uploadDir } from './modules/uploads/storage.service';
 import usersRoutes from './modules/users/users.routes';
+import tasksRoutes from './modules/tasks/tasks.routes';
+import searchRoutes from './modules/search/search.routes';
+import { isShuttingDown } from './lib/lifecycle';
+import { redisHealthy } from './lib/redis';
 import workspacesRoutes from './modules/workspaces/workspaces.routes';
 
 export const app = express();
@@ -56,7 +60,9 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '1mb' }));
-app.use('/uploads', express.static(uploadDir));
+// T.32 (audit L15): the unauthenticated `/uploads` static mount is gone — uploads
+// live in Cloudinary (private since T.32) and nothing has written to local disk
+// since the Cloudinary migration.
 
 app.get('/api/health', async (_req, res) => {
   const dbUrl = process.env.DATABASE_URL || '';
@@ -67,6 +73,21 @@ app.get('/api/health', async (_req, res) => {
   } catch {
     res.status(503).json({ database: 'error', message: 'Connection failed' });
   }
+});
+
+// T.33: readiness — may this instance receive traffic? The database must
+// answer, Redis too when it is configured (it carries cross-instance events),
+// and the process must not be draining for shutdown. /api/health stays the
+// liveness/database check it always was.
+app.get('/api/ready', async (_req, res) => {
+  const timeout = <T>(p: Promise<T>) => Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 2_000))]);
+  const [database, redis] = await Promise.all([
+    timeout(prisma.$queryRaw`SELECT 1`).then(() => 'ok' as const, () => 'error' as const),
+    redisHealthy().then((ok) => (ok === null ? ('not_configured' as const) : ok ? ('ok' as const) : ('error' as const))),
+  ]);
+  const draining = isShuttingDown();
+  const ready = database === 'ok' && redis !== 'error' && !draining;
+  res.status(ready ? 200 : 503).json({ ready, database, redis, draining });
 });
 
 // Stage 2 finalization (T.21): sign-up is invitation-only. The gate runs in
@@ -106,6 +127,10 @@ app.use('/api', uploadRoutes);
 // credentials and getting a 400 instead.
 app.use('/api/upload', handleUploadErrors);
 app.use('/api/workspaces', workspacesRoutes);
+// T.33: tasks, comments, dependencies, my tasks, workload, reports, work notifications.
+app.use('/api', tasksRoutes);
+// T.33: command-palette search (channels, people, projects, tasks, files).
+app.use('/api', searchRoutes);
 
 // Link previews: authenticated, rate-limited, SSRF-safe (modules/preview).
 app.use('/api', previewRoutes);
@@ -129,5 +154,7 @@ app.use('/api/account-activation', accountActivationRoutes);
 app.use('/api', teamMemberRoutes);
 // Stage 4 (T.23): Company Admin workspace overview — read-only metadata, admin only.
 app.use('/api/company-overview', companyOverviewRoutes);
+// T.32 (audit H4): WebRTC ICE (STUN/TURN) configuration for signed-in callers.
+app.use('/api/calls', callsRoutes);
 
 app.use(errorHandler);

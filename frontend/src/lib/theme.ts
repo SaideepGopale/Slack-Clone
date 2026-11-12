@@ -42,6 +42,13 @@ let current: ResolvedTheme = 'light';
 export const applyTheme = (): ResolvedTheme => {
   const theme = resolveTheme(getThemePreference(), systemPrefersDark());
   const root = document.documentElement;
+  // T.32: when the theme actually changes (not on first paint), colours ease
+  // over 200ms instead of snapping (index.css `html.theme-transition`;
+  // collapsed by prefers-reduced-motion).
+  if (theme !== current && root.classList.contains('dark') !== (theme === 'dark') && root.dataset.theme) {
+    root.classList.add('theme-transition');
+    window.setTimeout(() => root.classList.remove('theme-transition'), 260);
+  }
   root.classList.toggle('dark', theme === 'dark');
   root.dataset.theme = theme;
   root.style.colorScheme = theme;

@@ -51,9 +51,18 @@ export type AuditAction =
   | 'REISSUE_ACCOUNT_INVITATION'
   | 'ACTIVATE_ACCOUNT'
   // Stage 3 (T.22): Team Lead → Member provisioning.
-  | 'PROVISION_MEMBER';
+  | 'PROVISION_MEMBER'
+  // T.32: account security events. Details never contain a token or password.
+  | 'RESET_PASSWORD'
+  | 'CHANGE_PASSWORD'
+  | 'REVOKE_SESSIONS'
+  | 'BOOTSTRAP_ADMIN'
+  | 'DELETE_FILES'
+  // T.33: project & task management.
+  | 'DELETE_TASK'
+  | 'SHARE_TASK';
 
-export type AuditTargetType = 'USER' | 'CHANNEL' | 'MESSAGE' | 'FILE' | 'WORKSPACE' | 'ORGANIZATION' | 'PROJECT';
+export type AuditTargetType = 'USER' | 'CHANNEL' | 'MESSAGE' | 'FILE' | 'WORKSPACE' | 'ORGANIZATION' | 'PROJECT' | 'TASK';
 
 // Best-effort by design: a logging failure must never turn a successful ban/
 // delete/role-change into a failed request for the admin who performed it.

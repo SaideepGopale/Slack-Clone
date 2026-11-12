@@ -1,30 +1,59 @@
+import { lazy, Suspense } from 'react';
 import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
-import { ResetPassword } from '../components/auth/ResetPassword';
-import { AdminPage } from '../pages/admin/AdminPage';
-import { ActivateAccountPage } from '../pages/auth/ActivateAccountPage';
-import { InviteHandler } from '../pages/auth/InviteHandler';
-import { JoinWorkspacePage } from '../pages/auth/JoinWorkspacePage';
+import { RouteErrorScreen } from '../components/ui/ErrorBoundary';
+import { LoadingScreen } from '../components/ui/LoadingScreen';
 import { LoginPage } from '../pages/auth/LoginPage';
-import { ActivityPage } from '../pages/workspace/ActivityPage';
-import { ChannelPage } from '../pages/workspace/ChannelPage';
-import { DirectoryPage } from '../pages/workspace/DirectoryPage';
-import { DMsPage } from '../pages/workspace/DMsPage';
-import { HomePage } from '../pages/workspace/HomePage';
-import { MorePage } from '../pages/workspace/MorePage';
-import { MyWorkspacesPage } from '../pages/workspace/MyWorkspacesPage';
 import { WorkspaceIndex } from '../pages/workspace/WorkspaceIndex';
 import { WorkspaceLayout } from '../pages/workspace/WorkspaceLayout';
 import { WorkspaceRedirect } from '../pages/workspace/WorkspaceRedirect';
 import { WorkspacesProvider } from '../pages/workspace/WorkspacesProvider';
-import { ManagedWorkspacePage } from '../pages/organization/ManagedWorkspacePage';
-import { OrganizationPage } from '../pages/organization/OrganizationPage';
-import { OrganizationRedirect } from '../pages/organization/OrganizationRedirect';
-import { OrganizationsPage } from '../pages/organization/OrganizationsPage';
-import { WorkspaceSettingsPage } from '../pages/workspace/settings/WorkspaceSettingsPage';
-import { ProjectShell, ProjectsShell } from '../pages/workspace/shells/RouteShells';
 import { ProtectedRoute } from './ProtectedRoute';
 
+// T.32 (audit M25): every page beyond sign-in and the workspace shell is its
+// own chunk, loaded on first visit — the admin console (charts), the channel
+// view (rich-text editor), settings and organization pages no longer weigh
+// on everyone's first load.
+const page = <T extends Record<string, unknown>>(load: () => Promise<T>, name: keyof T) =>
+  lazy(() => load().then((m) => ({ default: m[name] as React.ComponentType })));
+
+const ResetPassword = page(() => import('../components/auth/ResetPassword'), 'ResetPassword');
+const AdminPage = page(() => import('../pages/admin/AdminPage'), 'AdminPage');
+const ActivateAccountPage = page(() => import('../pages/auth/ActivateAccountPage'), 'ActivateAccountPage');
+const InviteHandler = page(() => import('../pages/auth/InviteHandler'), 'InviteHandler');
+const JoinWorkspacePage = page(() => import('../pages/auth/JoinWorkspacePage'), 'JoinWorkspacePage');
+const ActivityPage = page(() => import('../pages/workspace/ActivityPage'), 'ActivityPage');
+const ChannelPage = page(() => import('../pages/workspace/ChannelPage'), 'ChannelPage');
+const DirectoryPage = page(() => import('../pages/workspace/DirectoryPage'), 'DirectoryPage');
+const DMsPage = page(() => import('../pages/workspace/DMsPage'), 'DMsPage');
+const HomePage = page(() => import('../pages/workspace/HomePage'), 'HomePage');
+const MorePage = page(() => import('../pages/workspace/MorePage'), 'MorePage');
+const MyWorkspacesPage = page(() => import('../pages/workspace/MyWorkspacesPage'), 'MyWorkspacesPage');
+const ManagedWorkspacePage = page(() => import('../pages/organization/ManagedWorkspacePage'), 'ManagedWorkspacePage');
+const OrganizationPage = page(() => import('../pages/organization/OrganizationPage'), 'OrganizationPage');
+const OrganizationRedirect = page(() => import('../pages/organization/OrganizationRedirect'), 'OrganizationRedirect');
+const OrganizationsPage = page(() => import('../pages/organization/OrganizationsPage'), 'OrganizationsPage');
+const WorkspaceSettingsPage = page(() => import('../pages/workspace/settings/WorkspaceSettingsPage'), 'WorkspaceSettingsPage');
+// T.33: projects & tasks.
+const ProjectsPage = page(() => import('../pages/projects/ProjectsPage'), 'ProjectsPage');
+const ProjectPage = page(() => import('../pages/projects/ProjectPage'), 'ProjectPage');
+const MyTasksPage = page(() => import('../pages/projects/MyTasksPage'), 'MyTasksPage');
+const TeamTasksPage = page(() => import('../pages/projects/TeamTasksPage'), 'TeamTasksPage');
+const ChatsPage = page(() => import('../pages/workspace/ChatsPage'), 'ChatsPage');
+const CallsPage = page(() => import('../pages/workspace/CallsPage'), 'CallsPage');
+
+/** Top-level pages: full-screen fallback while a page chunk loads. */
+const RootLayout = () => (
+  <Suspense fallback={<LoadingScreen />}>
+    <Outlet />
+  </Suspense>
+);
+
 export const router = createBrowserRouter([
+  {
+    // T.32 (audit M22): one error screen for every route (no blank page).
+    element: <RootLayout />,
+    errorElement: <RouteErrorScreen />,
+    children: [
   { path: '/login', element: <LoginPage /> },
   // Same component as /login — AuthForm just defaults to its Sign Up tab
   // (see LoginPage.tsx's startOnSignup prop).
@@ -87,12 +116,20 @@ export const router = createBrowserRouter([
           { path: 'organizations', element: <OrganizationsPage /> },
           { path: 'organizations/:organizationId', element: <OrganizationPage /> },
           { path: 'organizations/:organizationId/workspaces/:managedWorkspaceId', element: <ManagedWorkspacePage /> },
-          // F1 route shells for F3 — not linked from navigation yet.
-          { path: 'projects', element: <ProjectsShell /> },
-          { path: 'projects/:projectId', element: <ProjectShell /> },
+          // T.33: projects (board/list/calendar/workload/overview) and My Tasks.
+          { path: 'projects', element: <ProjectsPage /> },
+          { path: 'projects/:projectId', element: <ProjectPage /> },
+          { path: 'tasks', element: <MyTasksPage /> },
+          // T.38: the Team Lead dashboard (lead-only on the server).
+          { path: 'team-tasks', element: <TeamTasksPage /> },
+          // T.39: the phone's Chats and Calls tabs (usable at any width).
+          { path: 'chats', element: <ChatsPage /> },
+          { path: 'calls', element: <CallsPage /> },
         ],
       },
     ],
   },
   { path: '*', element: <Navigate to="/" replace /> },
+    ],
+  },
 ]);

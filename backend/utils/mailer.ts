@@ -1,4 +1,5 @@
 import { Resend } from 'resend';
+import { emailDeliveryConfigured } from '../lib/emailDelivery';
 
 // Switched from Gmail SMTP (nodemailer) to Resend's HTTP API — Render's free
 // tier silently blocks/times-out outbound SMTP (ports 587 and 465 both hung
@@ -16,9 +17,8 @@ const DEFAULT_FROM = `${EMAIL_BRAND} <onboarding@resend.dev>`;
 export const emailFrom = () => process.env.EMAIL_FROM?.trim() || DEFAULT_FROM;
 
 const getClient = (): Resend | null => {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return null;
-  return new Resend(apiKey);
+  if (!emailDeliveryConfigured()) return null;
+  return new Resend((process.env.RESEND_API_KEY as string).trim());
 };
 
 // 1. Send Invite Email Function

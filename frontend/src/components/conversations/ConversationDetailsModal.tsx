@@ -146,7 +146,7 @@ export const ConversationDetailsModal = ({ conversation, workspaceId, currentUse
               {details.participants.map((p) => (
                 <li key={p.id} className="flex items-center gap-3 py-2">
                   <span className="relative">
-                    <span className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-violet-700 text-white flex items-center justify-center text-xs font-bold uppercase">
+                    <span className="w-8 h-8 rounded-lg bg-accent-600 text-white flex items-center justify-center text-xs font-bold uppercase">
                       {p.username[0]}
                     </span>
                     <span

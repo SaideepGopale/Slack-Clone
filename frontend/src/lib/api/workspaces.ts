@@ -43,6 +43,8 @@ export interface WorkspaceSettings {
   /** The caller's workspace role; null for an organization manager who isn't a member. */
   myRole: WorkspaceRole | null;
   organizationRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+  /** T.36: false when the server has no e-mail provider, so invitation e-mails cannot be sent. */
+  emailInvitationsAvailable?: boolean;
   capabilities: WorkspaceSettingsCapabilities;
 }
 

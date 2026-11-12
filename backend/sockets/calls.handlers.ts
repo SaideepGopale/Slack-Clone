@@ -1,5 +1,9 @@
+import { randomUUID } from 'crypto';
 import { Server } from 'socket.io';
+import { isUuid } from '../lib/messageInput';
 import { prisma } from '../lib/prisma';
+import { CallParticipant, getCallStore } from './callStore';
+import { STALE_MS } from './presenceStore';
 import { isChannelMember } from './channelAccess';
 import { AuthenticatedSocket } from './types';
 
@@ -19,31 +23,48 @@ interface IceCandidatePayload {
   usernameFragment?: string | null;
 }
 
-interface CallParticipant {
-  socketId: string;
-  userId: string;
-  username: string;
-}
+// T.32 (audit RT-9): calls are a full mesh (every browser sends to every
+// other), which degrades sharply beyond a handful of people. Configurable,
+// default 8.
+export const MAX_CALL_PARTICIPANTS = (() => {
+  const n = Number(process.env.CALL_MAX_PARTICIPANTS);
+  return Number.isInteger(n) && n >= 2 && n <= 16 ? n : 8;
+})();
 
-// channelId -> socketId -> participant. Kept as our own bookkeeping rather
-// than relying on Socket.IO's fetchSockets() (whose RemoteSocket shape only
-// exposes `.data`, not arbitrary properties like our `.user` — this stays
-// correct even if a Redis adapter is added later for multi-instance scaling).
-const callRooms = new Map<string, Map<string, CallParticipant>>();
+// Participants and rings live in a CallStore (callStore.ts): in memory for
+// one process, in Redis when REDIS_URL is set (T.33), so a call can span
+// instances. The store — not any one process's socket list — is the source of
+// truth for "who is in this call". Signals are delivered with
+// `io.to(socketId)`, which the Redis adapter routes to whichever instance
+// holds that socket.
+const calls = () => getCallStore();
 
 const callRoom = (channelId: string) => `call:${channelId}`;
 
-// Exported for access revocation (sockets/revocation.ts): a member removed
-// from a channel/workspace is dropped from any call in it immediately.
-export const removeFromCallRoom = (socket: AuthenticatedSocket, channelId: string) => {
-  const room = callRooms.get(channelId);
-  if (!room?.has(socket.id)) return;
+// A participant whose instance died never ran its disconnect handler; on the
+// next join, entries older than this whose socket is gone are pruned (the
+// grace covers a join that is registered but not yet in the room).
+const STALE_PARTICIPANT_GRACE_MS = STALE_MS;
 
-  room.delete(socket.id);
-  if (room.size === 0) callRooms.delete(channelId);
+/**
+ * Removes one socket (on any instance) from a call and tells the remaining
+ * participants. Exported for access revocation (sockets/revocation.ts): a
+ * member removed from a channel/workspace is dropped from any call in it
+ * immediately.
+ */
+export const removeFromCall = async (io: Server, socketId: string, channelId: string) => {
+  if (!(await calls().leave(channelId, socketId))) return;
+  io.in(socketId).socketsLeave(callRoom(channelId));
+  io.to(callRoom(channelId)).except(socketId).emit('webrtc:peer-left', { socketId });
+};
 
-  socket.leave(callRoom(channelId));
-  socket.to(callRoom(channelId)).emit('webrtc:peer-left', { socketId: socket.id });
+/** Drops every socket of `userId` from the calls of the given channels. */
+export const removeUserFromCalls = async (io: Server, userId: string, channelIds: string[]) => {
+  for (const channelId of channelIds) {
+    for (const p of await calls().participants(channelId)) {
+      if (p.userId === userId) await removeFromCall(io, p.socketId, channelId);
+    }
+  }
 };
 
 // Two-layer check, same reasoning as channels.handlers.ts's channel:join:
@@ -81,17 +102,15 @@ const verifyCallAccess = async (userId: string, channelId: string): Promise<bool
 // where only one person can pick up — when the other person declines or
 // answers. Every end is broadcast as `call:ring_ended` so each of the callee's
 // devices dismisses its banner; a decline is reported to the caller alone.
-interface ActiveRing {
-  callerId: string;
-  callerSocketId: string;
-  oneToOne: boolean;
-  answered: boolean;
-  timer: ReturnType<typeof setTimeout>;
-}
+// T.33: the ring itself is in the CallStore; its timeout timer lives on the
+// instance of the caller's socket (keyed by ringId, so a timer belonging to a
+// replaced or already-ended ring is a no-op). The stored ring also expires on
+// its own shortly after the timeout, should that instance die.
 type RingEndReason = 'cancelled' | 'timeout' | 'declined' | 'answered';
 
-const activeRings = new Map<string, ActiveRing>();
+const ringTimers = new Map<string, { ringId: string; callerSocketId: string; timer: ReturnType<typeof setTimeout> }>();
 const DEFAULT_RING_TIMEOUT_MS = 45_000;
+const RING_TTL_MARGIN_MS = 5_000;
 
 /** Ring duration; CALL_RING_TIMEOUT_MS may override it within 1 s – 5 min. */
 const ringTimeoutMs = () => {
@@ -99,11 +118,14 @@ const ringTimeoutMs = () => {
   return Number.isInteger(configured) && configured >= 1_000 && configured <= 300_000 ? configured : DEFAULT_RING_TIMEOUT_MS;
 };
 
-const endRing = (io: Server, channelId: string, reason: RingEndReason) => {
-  const ring = activeRings.get(channelId);
+const endRing = async (io: Server, channelId: string, reason: RingEndReason, ringId?: string) => {
+  const ring = await calls().takeRing(channelId, ringId);
   if (!ring) return;
-  clearTimeout(ring.timer);
-  activeRings.delete(channelId);
+  const local = ringTimers.get(channelId);
+  if (local?.ringId === ring.ringId) {
+    clearTimeout(local.timer);
+    ringTimers.delete(channelId);
+  }
   io.to(channelId).emit('call:ring_ended', { channelId, reason });
 };
 
@@ -149,20 +171,22 @@ const sanitizeCandidate = (value: unknown): IceCandidatePayload | null => {
 };
 
 // The recipient of a relay must be ANOTHER socket that is currently a
-// participant of the same call (it passed verifyCallAccess at webrtc:join).
-// Anything else — a room name, a socket in a different call, the sender
-// itself, a socket that already disconnected — resolves to null.
-const resolveCallPeer = (io: Server, channelId: string, senderSocketId: string, to: unknown) => {
+// participant of the same call (it passed verifyCallAccess at webrtc:join and
+// is in the call store). Anything else — a room name, a socket in a different
+// call, the sender itself, a socket that left or disconnected — resolves to
+// null. A socket on this instance must additionally still be connected and in
+// the call room; a socket on another instance is trusted to the store, which
+// its own instance updates on leave/disconnect.
+const resolveCallPeer = async (io: Server, channelId: string, senderSocketId: string, to: unknown) => {
   if (!isBoundedString(to, MAX_ID_LENGTH) || to === senderSocketId) return null;
-  const participant = callRooms.get(channelId)?.get(to);
+  const participant = await calls().get(channelId, to);
   if (!participant) return null;
-  const target = io.sockets.sockets.get(to) as AuthenticatedSocket | undefined;
-  if (!target?.connected || !target.rooms.has(callRoom(channelId))) return null;
-  return { participant, target };
+  const local = io.sockets.sockets.get(to);
+  if (local && (!local.connected || !local.rooms.has(callRoom(channelId)))) return null;
+  return participant;
 };
 
-const stillInCall = (target: AuthenticatedSocket, channelId: string) =>
-  target.connected && !!callRooms.get(channelId)?.has(target.id);
+const stillInCall = async (socketId: string, channelId: string) => (await calls().get(channelId, socketId)) !== null;
 
 // ── Ring-request validation (P1-B, finding FA-RT-02) ─────────────────────
 // `call:initiate` used to relay the client's own `callerName` and `callType`
@@ -219,21 +243,25 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
       }
 
       // Someone else's ring already in progress stays theirs; a re-ring by
-      // the same caller restarts the timer.
-      const existing = activeRings.get(ring.channelId);
-      if (!existing || existing.callerId === user.id) {
-        if (existing) clearTimeout(existing.timer);
-        const channelId = ring.channelId;
-        activeRings.set(channelId, {
-          callerId: user.id,
-          callerSocketId: socket.id,
-          oneToOne: callChannel.oneToOne,
-          answered: false,
-          timer: setTimeout(() => {
-            const current = activeRings.get(channelId);
-            if (current) endRing(io, channelId, current.answered ? 'answered' : 'timeout');
-          }, ringTimeoutMs()),
-        });
+      // the same caller replaces it (and restarts the timer).
+      const channelId = ring.channelId;
+      const timeout = ringTimeoutMs();
+      const proposed = { ringId: randomUUID(), callerId: user.id, callerSocketId: socket.id, oneToOne: callChannel.oneToOne, answered: false };
+      const inForce = await calls().startRing(channelId, proposed, timeout + RING_TTL_MARGIN_MS);
+      if (inForce.ringId === proposed.ringId) {
+        const previous = ringTimers.get(channelId);
+        if (previous) clearTimeout(previous.timer);
+        const timer = setTimeout(() => {
+          ringTimers.delete(channelId);
+          calls()
+            .getRing(channelId)
+            .then((current) => {
+              if (current?.ringId === proposed.ringId) return endRing(io, channelId, current.answered ? 'answered' : 'timeout', proposed.ringId);
+            })
+            .catch((err) => console.error('call ring timeout failed:', err));
+        }, timeout);
+        timer.unref?.();
+        ringTimers.set(channelId, { ringId: proposed.ringId, callerSocketId: socket.id, timer });
       }
 
       // P3: never to the caller's own other tabs/devices (they share the room).
@@ -253,13 +281,13 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
   socket.on('call:decline', async (data: unknown) => {
     const channelId = (data as { channelId?: unknown } | null)?.channelId;
     if (!isBoundedString(channelId, MAX_ID_LENGTH)) return;
-    const ring = activeRings.get(channelId);
-    if (!ring || ring.callerId === user.id) return;
     try {
+      const ring = await calls().getRing(channelId);
+      if (!ring || ring.callerId === user.id) return;
       if (!(await verifyCallAccess(user.id, channelId))) return;
-      if (activeRings.get(channelId) !== ring) return; // ended meanwhile
+      if ((await calls().getRing(channelId))?.ringId !== ring.ringId) return; // ended meanwhile
       io.to(ring.callerSocketId).emit('call:declined', { channelId, userId: user.id, username: callerDisplayName(user.username) });
-      if (ring.oneToOne) endRing(io, channelId, 'declined');
+      if (ring.oneToOne) await endRing(io, channelId, 'declined', ring.ringId);
     } catch (err) {
       console.error('call:decline failed:', err);
     }
@@ -269,8 +297,12 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
   socket.on('call:cancel', (data: unknown) => {
     const channelId = (data as { channelId?: unknown } | null)?.channelId;
     if (!isBoundedString(channelId, MAX_ID_LENGTH)) return;
-    const ring = activeRings.get(channelId);
-    if (ring && ring.callerId === user.id) endRing(io, channelId, 'cancelled');
+    calls()
+      .getRing(channelId)
+      .then((ring) => {
+        if (ring && ring.callerId === user.id) return endRing(io, channelId, 'cancelled', ring.ringId);
+      })
+      .catch((err) => console.error('call:cancel failed:', err));
   });
 
   // A socket must have successfully joined the call room to send/receive
@@ -281,9 +313,10 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
   // did that fresh check moments earlier (see its own comment below).
   const isActiveInCall = (channelId: string) => socket.rooms.has(callRoom(channelId));
 
-  socket.on('webrtc:join', async (data: { channelId: string }) => {
+  socket.on('webrtc:join', async (data: { channelId?: unknown; media?: { audio?: unknown; video?: unknown } }) => {
     const channelId = data?.channelId;
-    if (!channelId) return;
+    if (!isUuid(channelId)) return;
+    const media = { audio: data?.media?.audio !== false, video: data?.media?.video === true };
 
     try {
       if (!(await verifyCallAccess(user.id, channelId))) {
@@ -291,27 +324,56 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
         return;
       }
 
-      const room = callRooms.get(channelId) ?? new Map<string, CallParticipant>();
-      callRooms.set(channelId, room);
+      // T.33: drop participants whose instance died without cleaning up
+      // (their socket is in no instance's call room any more).
+      const existing = await calls().participants(channelId);
+      if (existing.some((p) => p.socketId !== socket.id)) {
+        try {
+          const live = new Set((await io.in(callRoom(channelId)).fetchSockets()).map((s) => s.id));
+          for (const socketId of await calls().prune(channelId, live, STALE_PARTICIPANT_GRACE_MS)) {
+            io.to(callRoom(channelId)).emit('webrtc:peer-left', { socketId });
+          }
+        } catch (err) {
+          console.error('webrtc:join prune skipped:', err instanceof Error ? err.message : err);
+        }
+      }
+
+      // T.32 (audit RT-9): a repeated join from the same socket replaces its
+      // own entry instead of listing itself as an "existing participant". The
+      // cap is checked and the participant registered in one atomic step, so
+      // concurrent joins on different instances cannot exceed it.
+      const participant: CallParticipant = { socketId: socket.id, userId: user.id, username: user.username, media, joinedAt: Date.now() };
+      const joined = await calls().join(channelId, participant, MAX_CALL_PARTICIPANTS);
+      if (!joined.ok) {
+        socket.emit('webrtc:error', { code: 'call_full', message: `This call is full (${MAX_CALL_PARTICIPANTS} people). Try again when someone leaves.` });
+        return;
+      }
+      // The socket may have disconnected while we were checking.
+      if (socket.disconnected) {
+        await calls().leave(channelId, socket.id);
+        return;
+      }
+      const { rejoin } = joined;
 
       // Tell the joiner who's already in the call (they'll initiate offers to each)...
-      socket.emit('webrtc:existing-participants', { participants: Array.from(room.values()) });
+      socket.emit('webrtc:existing-participants', {
+        participants: joined.others.map(({ joinedAt: _joinedAt, ...p }) => p),
+        maxParticipants: MAX_CALL_PARTICIPANTS,
+      });
 
-      // ...then register them and tell the existing participants a new peer arrived.
-      room.set(socket.id, { socketId: socket.id, userId: user.id, username: user.username });
+      // ...then tell the existing participants a new peer arrived.
       socket.join(callRoom(channelId));
+      if (rejoin) socket.to(callRoom(channelId)).emit('webrtc:peer-left', { socketId: socket.id });
       socket.to(callRoom(channelId)).emit('webrtc:peer-joined', {
         socketId: socket.id,
         userId: user.id,
         username: user.username,
+        media,
       });
 
       // Someone other than the caller picked up.
-      const ring = activeRings.get(channelId);
-      if (ring && ring.callerId !== user.id) {
-        ring.answered = true;
-        if (ring.oneToOne) endRing(io, channelId, 'answered');
-      }
+      const ring = await calls().markAnswered(channelId, user.id);
+      if (ring?.oneToOne) await endRing(io, channelId, 'answered', ring.ringId);
     } catch (err) {
       console.error('webrtc:join failed:', err);
     }
@@ -332,25 +394,26 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
     const payload = (data ?? {}) as { channelId?: unknown; to?: unknown; offer?: unknown; answer?: unknown };
     const channelId = payload.channelId;
     if (!isBoundedString(channelId, MAX_ID_LENGTH) || !isActiveInCall(channelId)) return;
-    const peer = resolveCallPeer(io, channelId, socket.id, payload.to);
     const description = sanitizeDescription(kind === 'offer' ? payload.offer : payload.answer, kind);
-    if (!peer || !description) return;
+    if (!description) return;
     try {
+      const peer = await resolveCallPeer(io, channelId, socket.id, payload.to);
+      if (!peer) return;
       const [senderAllowed, recipientAllowed] = await Promise.all([
         verifyCallAccess(user.id, channelId),
-        verifyCallAccess(peer.participant.userId, channelId),
+        verifyCallAccess(peer.userId, channelId),
       ]);
       if (!senderAllowed) {
-        removeFromCallRoom(socket, channelId);
+        await removeFromCall(io, socket.id, channelId);
         return;
       }
       if (!recipientAllowed) {
-        removeFromCallRoom(peer.target, channelId);
+        await removeFromCall(io, peer.socketId, channelId);
         return;
       }
       // Re-check after the awaits: either side may have left meanwhile.
-      if (!isActiveInCall(channelId) || !stillInCall(peer.target, channelId)) return;
-      peer.target.emit(`webrtc:${kind}`, { from: socket.id, channelId, [kind]: description });
+      if (!isActiveInCall(channelId) || !(await stillInCall(peer.socketId, channelId))) return;
+      io.to(peer.socketId).emit(`webrtc:${kind}`, { from: socket.id, channelId, [kind]: description });
     } catch (err) {
       console.error(`webrtc:${kind} failed:`, err);
     }
@@ -371,22 +434,39 @@ export const registerCallHandlers = (io: Server, socket: AuthenticatedSocket) =>
     const payload = (data ?? {}) as { channelId?: unknown; to?: unknown; candidate?: unknown };
     const channelId = payload.channelId;
     if (!isBoundedString(channelId, MAX_ID_LENGTH) || !isActiveInCall(channelId)) return;
-    const peer = resolveCallPeer(io, channelId, socket.id, payload.to);
     const candidate = sanitizeCandidate(payload.candidate);
-    if (!peer || !candidate) return;
-    peer.target.emit('webrtc:ice-candidate', { from: socket.id, channelId, candidate });
+    if (!candidate) return;
+    resolveCallPeer(io, channelId, socket.id, payload.to)
+      .then((peer) => {
+        if (peer && isActiveInCall(channelId)) io.to(peer.socketId).emit('webrtc:ice-candidate', { from: socket.id, channelId, candidate });
+      })
+      .catch((err) => console.error('webrtc:ice-candidate failed:', err));
   });
 
-  socket.on('webrtc:leave', (data: { channelId: string }) => {
-    if (data?.channelId) removeFromCallRoom(socket, data.channelId);
+  socket.on('webrtc:leave', (data: { channelId?: unknown }) => {
+    if (isUuid(data?.channelId)) removeFromCall(io, socket.id, data.channelId).catch((err) => console.error('webrtc:leave failed:', err));
+  });
+
+  // T.32: microphone/camera on-off, relayed to the other participants of the
+  // same call only (the sender must be in it). Lets peers show "camera off"
+  // and "muted" instead of a black or silent tile.
+  socket.on('webrtc:media-state', (data: { channelId?: unknown; audio?: unknown; video?: unknown }) => {
+    const channelId = data?.channelId;
+    if (!isUuid(channelId) || typeof data.audio !== 'boolean' || typeof data.video !== 'boolean') return;
+    if (!isActiveInCall(channelId)) return;
+    const media = { audio: data.audio, video: data.video };
+    socket.to(callRoom(channelId)).emit('webrtc:media-state', { channelId, socketId: socket.id, ...media });
+    calls()
+      .setMedia(channelId, socket.id, media)
+      .catch((err) => console.error('webrtc:media-state failed:', err));
   });
 
   socket.on('disconnect', () => {
-    for (const channelId of callRooms.keys()) {
-      removeFromCallRoom(socket, channelId);
-    }
-    for (const [channelId, ring] of activeRings) {
-      if (ring.callerSocketId === socket.id) endRing(io, channelId, 'cancelled');
-    }
+    (async () => {
+      for (const channelId of await calls().channelsOf(socket.id)) await removeFromCall(io, socket.id, channelId);
+      for (const [channelId, local] of Array.from(ringTimers)) {
+        if (local.callerSocketId === socket.id) await endRing(io, channelId, 'cancelled', local.ringId);
+      }
+    })().catch((err) => console.error('call disconnect cleanup failed:', err));
   });
 };

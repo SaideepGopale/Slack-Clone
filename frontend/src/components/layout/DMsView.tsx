@@ -46,7 +46,7 @@ export const DMsView = ({
     <div className="flex-1 flex flex-col h-full bg-white min-w-0">
       <div className="h-16 border-b border-gray-100 flex items-center justify-between gap-3 px-4 md:px-6 shrink-0">
         <div className="min-w-0">
-          <h1 className="text-xl font-black text-gray-900 tracking-tight">Direct Messages</h1>
+          <h1 className="text-xl font-semibold text-gray-900 tracking-tight">Direct Messages</h1>
           <p className="text-[11px] text-gray-400 font-bold uppercase tracking-widest leading-none mt-1">
             {dms.length} {dms.length === 1 ? 'conversation' : 'conversations'}
           </p>
@@ -85,7 +85,7 @@ export const DMsView = ({
             <div className="w-16 h-16 bg-gray-50 rounded-2xl flex items-center justify-center text-gray-300 mb-5">
               <MessageSquare size={32} aria-hidden="true" />
             </div>
-            <h2 className="text-lg font-black text-gray-900 mb-2">No conversations yet</h2>
+            <h2 className="text-lg font-semibold text-gray-900 mb-2">No conversations yet</h2>
             <p className="text-sm text-gray-500 max-w-sm mb-6">
               Direct messages are private conversations between you and a teammate.
             </p>
@@ -119,7 +119,7 @@ export const DMsView = ({
                     aria-label={`Open ${isGroup ? 'group conversation' : 'conversation with'} ${dm.name}${unread ? `, ${unread} unread` : ''}`}
                   >
                     <span className="relative shrink-0">
-                      <span className="w-11 h-11 rounded-xl bg-gradient-to-br from-violet-500 to-violet-700 text-white flex items-center justify-center font-bold uppercase">
+                      <span className="w-11 h-11 rounded-xl bg-accent-600 text-white flex items-center justify-center font-bold uppercase">
                         {isGroup ? <Users size={20} aria-hidden="true" /> : dm.name?.[0] ?? '?'}
                       </span>
                       {!isGroup && (
@@ -132,7 +132,7 @@ export const DMsView = ({
                     </span>
                     <span className="flex-1 min-w-0">
                       <span className="flex items-baseline justify-between gap-3">
-                        <span className={`truncate text-[15px] ${unread ? 'font-black text-gray-900' : 'font-semibold text-gray-800'}`}>
+                        <span className={`truncate text-[15px] ${unread ? 'font-semibold text-gray-900' : 'font-semibold text-gray-800'}`}>
                           {dm.name}
                         </span>
                         {when && <span className="shrink-0 text-[11px] text-gray-400">{when}</span>}
@@ -141,7 +141,7 @@ export const DMsView = ({
                       <span className={`block truncate text-sm ${unread ? 'text-gray-800 font-medium' : 'text-gray-500'}`}>{preview}</span>
                     </span>
                     {unread > 0 && (
-                      <span className="shrink-0 min-w-[22px] h-[22px] px-1.5 rounded-full bg-red-500 text-white text-[11px] font-black flex items-center justify-center">
+                      <span className="shrink-0 min-w-[22px] h-[22px] px-1.5 rounded-full bg-red-500 text-white text-[11px] font-semibold flex items-center justify-center">
                         {formatUnread(unread)}
                       </span>
                     )}

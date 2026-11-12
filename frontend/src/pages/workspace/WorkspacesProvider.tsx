@@ -93,6 +93,9 @@ export const useWorkspaces = () => {
   return ctx;
 };
 
+/** T.39: the shared list where a provider exists, else null (for optional, presentational use). */
+export const useOptionalWorkspaces = () => useContext(WorkspacesContext) ?? null;
+
 /**
  * Keeps the shared list live. Call it where the socket lives (WorkspaceLayout).
  * Renames are applied in place; anything that changes the signed-in user's

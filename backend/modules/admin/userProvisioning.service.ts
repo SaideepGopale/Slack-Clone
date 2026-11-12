@@ -6,7 +6,7 @@ import { findLoginOrUsernameClash } from '../../lib/identity';
 import { isUuid } from '../../lib/messageInput';
 import { prisma } from '../../lib/prisma';
 import { ensureSharedWorkspaceMembership, SYSTEM_USER_EMAIL } from '../../lib/sharedWorkspace';
-import { kickUserSockets } from '../../sockets/registry';
+import { revokeAllSessions } from '../../lib/sessions';
 
 /**
  * Platform user provisioning (P2). Every route that calls these sits behind
@@ -223,7 +223,8 @@ export const setUserPassword = async (adminId: string, userId: unknown, body: Re
   const target = await loadManageableUser(userId);
   const password = parsePassword(body?.password);
   await prisma.user.update({ where: { id: target.id }, data: { password: await bcrypt.hash(password, 12) } });
-  kickUserSockets(target.id);
+  // T.32 (audit H1): every existing session of the account ends (and its sockets disconnect).
+  await revokeAllSessions(target.id);
   await logAuditEvent(adminId, 'SET_USER_PASSWORD', 'USER', target.id, `Set a new password for "${target.username}"`);
   return { updated: true };
 };

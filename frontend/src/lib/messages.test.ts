@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createClientId, extractUrls, htmlToText, mergeMessages, PENDING_PREFIX, upsertMessage } from './messages';
+import { createClientId, extractUrls, htmlToText, mergeMessages, PENDING_PREFIX, reconcileLatestWindow, upsertMessage } from './messages';
 
 const msg = (id: string, createdAt: string, extra: Record<string, unknown> = {}) => ({ id, createdAt, ...extra });
 
@@ -44,5 +44,32 @@ describe('text helpers', () => {
     const ids = new Set(Array.from({ length: 50 }, createClientId));
     expect(ids.size).toBe(50);
     for (const id of ids) expect(id).toMatch(/^[A-Za-z0-9_-]{8,64}$/);
+  });
+});
+
+describe('reconcileLatestWindow (T.32, offline changes)', () => {
+  type M = { id: string; createdAt: string; content?: string; reactions?: string[] };
+  const local: M[] = [
+    msg('old', '2026-01-01T00:00:01Z', { content: 'outside the window' }),
+    msg('e', '2026-01-01T00:00:05Z', { content: 'before edit' }),
+    msg('gone', '2026-01-01T00:00:06Z', { content: 'deleted while offline' }),
+    msg('r', '2026-01-01T00:00:07Z', { reactions: ['👍'] }),
+    msg(`${PENDING_PREFIX}x`, '2026-01-01T00:00:09Z', { content: 'still sending' }),
+  ];
+  const page: M[] = [
+    msg('e', '2026-01-01T00:00:05Z', { content: 'after edit' }),
+    msg('r', '2026-01-01T00:00:07Z', { reactions: [] }),
+    msg('new', '2026-01-01T00:00:08Z', { content: 'arrived while offline' }),
+  ];
+
+  it('drops messages deleted offline, takes server versions, adds new ones, keeps older history and unsent messages', () => {
+    const out = reconcileLatestWindow<M>(local, page);
+    expect(out.map((m) => m.id)).toEqual(['old', 'e', 'r', 'new', `${PENDING_PREFIX}x`]);
+    expect(out.find((m) => m.id === 'e')?.content).toBe('after edit');
+    expect(out.find((m) => m.id === 'r')?.reactions).toEqual([]);
+  });
+
+  it('an empty latest page (everything deleted) keeps only unsent messages', () => {
+    expect(reconcileLatestWindow<M>(local, []).map((m) => m.id)).toEqual([`${PENDING_PREFIX}x`]);
   });
 });

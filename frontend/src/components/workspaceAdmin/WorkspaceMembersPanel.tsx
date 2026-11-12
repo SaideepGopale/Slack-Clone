@@ -18,7 +18,8 @@ import type { MemberProvisionResult } from '../../lib/api/teamManagement';
 import type { WorkspaceMember } from '../../types';
 import { AccessProblem } from '../management/AccessProblem';
 import { RoleBadge } from '../management/RoleBadge';
-import { Button, EmptyState, LoadingState, OneTimeCredentialsModal, Spinner, TextInput, useConfirm } from '../ui';
+import { Button, EmptyState, LoadingState, Spinner, TextInput, useConfirm } from '../ui';
+import { MemberCredentialsModal } from './MemberCredentialsModal';
 import { AddMembersModal } from './AddMembersModal';
 import { AddTeamMemberModal } from './AddTeamMemberModal';
 import { MemberActivationsPanel } from './MemberActivationsPanel';
@@ -131,15 +132,7 @@ export const WorkspaceMembersPanel = ({ workspaceId, settings, access, viewerId,
           }}
         />
       )}
-      {provisioned && (
-        <OneTimeCredentialsModal
-          title="Member invitation"
-          subtitle={`For ${provisioned.invitation.account.displayName || provisioned.invitation.account.username}. Share it privately — anyone with both the link and the temporary password can activate this account.`}
-          intro={`You've been added to SmartConnect as a member of ${settings.name}.`}
-          credentials={provisioned.credentials}
-          onClose={() => setProvisioned(null)}
-        />
-      )}
+      {provisioned && <MemberCredentialsModal result={provisioned} workspaceName={settings.name} onClose={() => setProvisioned(null)} />}
       <div className="flex flex-col sm:flex-row gap-2">
       <div className="relative flex-1">
         <Search size={16} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle" />
@@ -176,7 +169,7 @@ export const WorkspaceMembersPanel = ({ workspaceId, settings, access, viewerId,
             return (
               <li key={member.id} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div className="flex items-center gap-3 min-w-0">
-                  <div aria-hidden="true" className="w-8 h-8 rounded-full bg-brand-soft text-brand flex items-center justify-center font-black text-xs shrink-0">
+                  <div aria-hidden="true" className="w-8 h-8 rounded-full bg-brand-soft text-brand flex items-center justify-center font-semibold text-xs shrink-0">
                     {member.username.slice(0, 1).toUpperCase()}
                   </div>
                   <div className="min-w-0">

@@ -1,6 +1,4 @@
-import React from 'react';
-import { motion } from 'motion/react';
-import { Shield, Zap, MessageSquare, Users, Star, ArrowRight } from 'lucide-react';
+import { Activity, ArrowRight, Hash, Lock, MessageSquare, Users } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Channel } from '../../types';
 
@@ -11,103 +9,113 @@ interface HomeViewProps {
   onViewChange: (view: any) => void;
 }
 
+const greeting = () => {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+};
+
+/**
+ * Workspace home (T.32 redesign): a greeting, three real entry points (all
+ * counts come from the workspace's actual channel and conversation lists) and
+ * the channels you belong to. Every card and row is a real button.
+ */
 export const HomeView = ({ channels, dms, onSelectChannel, onViewChange }: HomeViewProps) => {
   const { user } = useAuth();
-  const publicChannels = channels.filter(c => !c.isDM);
-  const dmChannels = dms;
+  const myChannels = channels.filter((c) => !c.isDM);
+
+  const cards = [
+    {
+      id: 'directory',
+      icon: Hash,
+      title: 'Channels',
+      body: `${myChannels.length} ${myChannels.length === 1 ? 'channel' : 'channels'} you're in`,
+      action: 'Browse channels',
+    },
+    {
+      id: 'dms',
+      icon: MessageSquare,
+      title: 'Direct messages',
+      body: `${dms.length} ${dms.length === 1 ? 'conversation' : 'conversations'}`,
+      action: 'Open messages',
+    },
+    {
+      id: 'activity',
+      icon: Activity,
+      title: 'Activity',
+      body: 'Mentions, replies and reactions',
+      action: 'See activity',
+    },
+  ] as const;
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-white overflow-y-auto slack-scrollbar selection:bg-slack-purple/10">
-      <div className="max-w-5xl mx-auto w-full p-6 md:p-12">
-        {/* Welcome Header */}
-        <div className="mb-12">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-slack-purple/5 text-slack-purple rounded-full text-[10px] font-black uppercase tracking-widest mb-4">
-            <Zap size={12} className="fill-slack-purple" />
-            <span>Workspace Productivity</span>
-          </div>
-          <h1 className="text-4xl md:text-5xl font-black text-gray-900 tracking-tight mb-4">
-            Welcome back, <span className="text-slack-purple">{user?.username}</span>
+    <div className="flex h-full flex-1 flex-col overflow-y-auto bg-surface app-scrollbar">
+      <div className="mx-auto w-full max-w-4xl px-5 py-8 md:px-10 md:py-12">
+        <header className="mb-8 animate-fade-in">
+          <p className="text-sm text-fg-subtle">{greeting()}</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-[-0.02em] text-fg md:text-[28px]">
+            Welcome back, {user?.username}
           </h1>
-          <p className="text-lg text-gray-500 font-medium max-w-2xl leading-relaxed">
-            Everything you need to collaborate with your team is right here. Stay connected, stay productive.
-          </p>
+        </header>
+
+        <div className="mb-10 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {cards.map((card) => (
+            <button
+              key={card.id}
+              type="button"
+              onClick={() => onViewChange(card.id)}
+              className="group flex flex-col gap-3 rounded-xl border border-line bg-surface p-4 text-left transition-colors hover:border-border-strong hover:bg-surface-secondary"
+            >
+              <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-soft text-brand" aria-hidden="true">
+                <card.icon size={17} />
+              </span>
+              <span>
+                <span className="block text-sm font-semibold text-fg">{card.title}</span>
+                <span className="mt-0.5 block text-xs text-fg-subtle tabular-nums">{card.body}</span>
+              </span>
+              <span className="mt-auto flex items-center gap-1 text-xs font-medium text-brand">
+                {card.action} <ArrowRight size={12} className="transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+              </span>
+            </button>
+          ))}
         </div>
 
-        {/* Quick Stats/Actions */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
-          <motion.div 
-            whileHover={{ y: -5 }}
-            className="p-6 rounded-3xl bg-gray-50 border border-transparent hover:border-gray-200 transition-all flex flex-col gap-4"
-          >
-            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-slack-purple shadow-sm ring-1 ring-gray-100">
-              <MessageSquare size={24} />
-            </div>
-            <div>
-              <h3 className="font-black text-gray-900 tracking-tight">Active Channels</h3>
-              <p className="text-sm text-gray-500 font-medium">{publicChannels.length} collaboration {publicChannels.length === 1 ? 'space' : 'spaces'}</p>
-            </div>
-            <button onClick={() => onViewChange('directory')} className="mt-2 text-xs font-black text-slack-purple uppercase tracking-widest flex items-center gap-2 hover:gap-3 transition-all">
-              Join More <ArrowRight size={14} />
+        <section aria-labelledby="home-channels">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 id="home-channels" className="text-sm font-semibold text-fg">Your channels</h2>
+            <button type="button" onClick={() => onViewChange('directory')} className="text-xs font-medium text-fg-subtle transition-colors hover:text-fg">
+              See all
             </button>
-          </motion.div>
-
-          <motion.div 
-            whileHover={{ y: -5 }}
-            className="p-6 rounded-3xl bg-[#4a154b] text-white transition-all flex flex-col gap-4 shadow-xl shadow-purple-900/10"
-          >
-            <div className="w-12 h-12 bg-white/10 rounded-2xl flex items-center justify-center backdrop-blur-md border border-white/20">
-              <Users size={24} />
-            </div>
-            <div>
-              <h3 className="font-black tracking-tight">Direct Messages</h3>
-              <p className="text-sm text-purple-100/70 font-medium">{dmChannels.length} private {dmChannels.length === 1 ? 'conversation' : 'conversations'}</p>
-            </div>
-            <button onClick={() => onViewChange('dms')} className="mt-2 text-xs font-black text-white uppercase tracking-widest flex items-center gap-2 hover:gap-3 transition-all">
-              View All <ArrowRight size={14} />
-            </button>
-          </motion.div>
-
-          <motion.div 
-            whileHover={{ y: -5 }}
-            className="p-6 rounded-3xl bg-gray-50 border border-transparent hover:border-gray-200 transition-all flex flex-col gap-4"
-          >
-            <div className="w-12 h-12 bg-white rounded-2xl flex items-center justify-center text-orange-500 shadow-sm ring-1 ring-gray-100">
-              <Star size={24} />
-            </div>
-            <div>
-              <h3 className="font-black text-gray-900 tracking-tight">Important</h3>
-              <p className="text-sm text-gray-500 font-medium group-hover:text-gray-900">Check your latest activity</p>
-            </div>
-            <button onClick={() => onViewChange('activity')} className="mt-2 text-xs font-black text-gray-900 uppercase tracking-widest flex items-center gap-2 hover:gap-3 transition-all">
-              Go to Activity <ArrowRight size={14} />
-            </button>
-          </motion.div>
-        </div>
-
-        {/* Featured Channels */}
-        <div>
-          <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-black text-gray-900 tracking-tight">Your Channels</h2>
-            <button onClick={() => onViewChange('directory')} className="text-[11px] font-black text-gray-400 uppercase tracking-widest hover:text-gray-900 transition-colors">See all</button>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {publicChannels.slice(0, 4).map(ch => (
-              <div 
-                key={ch.id}
-                onClick={() => onSelectChannel(ch)}
-                className="p-4 rounded-2xl border border-gray-100 hover:border-slack-purple/20 hover:shadow-lg transition-all cursor-pointer group flex items-center gap-4 bg-white"
-              >
-                <div className="w-10 h-10 bg-gray-50 rounded-xl flex items-center justify-center text-gray-400 group-hover:bg-slack-purple/10 group-hover:text-slack-purple transition-all">
-                  <Shield size={20} />
-                </div>
-                <div>
-                  <h4 className="font-black text-gray-900 tracking-tight truncate group-hover:text-slack-purple transition-colors">#{ch.name}</h4>
-                  <p className="text-[11px] text-gray-400 font-bold uppercase tracking-widest">Public Space</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+          {myChannels.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-line px-4 py-8 text-center">
+              <Users size={18} className="mx-auto mb-2 text-fg-subtle" aria-hidden="true" />
+              <p className="text-sm text-fg-muted">You're not in any channels yet.</p>
+              <button type="button" onClick={() => onViewChange('directory')} className="mt-2 text-sm font-medium text-brand hover:text-brand-hover">
+                Browse channels
+              </button>
+            </div>
+          ) : (
+            <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {myChannels.slice(0, 8).map((ch) => (
+                <li key={ch.id}>
+                  <button
+                    type="button"
+                    onClick={() => onSelectChannel(ch)}
+                    className="group flex w-full items-center gap-3 rounded-lg border border-line bg-surface px-3 py-2.5 text-left transition-colors hover:border-border-strong hover:bg-surface-secondary"
+                  >
+                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-tertiary text-fg-muted" aria-hidden="true">
+                      {ch.icon && ch.icon !== 'hash' ? <span className="text-base leading-none">{ch.icon}</span> : ch.visibility === 'PRIVATE' ? <Lock size={14} /> : <Hash size={15} />}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-fg">{ch.name}</span>
+                      <span className="block truncate text-xs text-fg-subtle">{ch.visibility === 'PRIVATE' ? 'Private channel' : ch.description || 'Public channel'}</span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
     </div>
   );

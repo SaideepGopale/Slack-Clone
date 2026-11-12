@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import { prisma } from './lib/prisma.js';
+import { reconcileSharedWorkspace } from './lib/sharedWorkspace.js';
 
 // Stage 1B (T.30): development-only. Nothing here has a default password and
 // no password is ever printed. Supply both before running, e.g.
@@ -42,7 +43,8 @@ async function seed() {
       data: {
         username: 'admin',
         email: 'admin@slack.com',
-        password: adminHashedPassword
+        password: adminHashedPassword,
+        role: 'ADMIN'
       }
     });
 
@@ -50,26 +52,11 @@ async function seed() {
     console.log('   Email: admin@slack.com');
     console.log('   Password: (SEED_ADMIN_PASSWORD, not printed)');
 
-    // Create general channel
-    const generalChannel = await prisma.channel.create({
-      data: {
-        name: 'general',
-        description: 'General discussion channel',
-        createdBy: user.id
-      }
-    });
-
-    console.log('✅ General channel created');
-
-    // Add users to general channel
-    await prisma.channelMember.createMany({
-      data: [
-        { userId: user.id, channelId: generalChannel.id, role: 'member' },
-        { userId: admin.id, channelId: generalChannel.id, role: 'admin' }
-      ]
-    });
-
-    console.log('✅ Users added to general channel');
+    // T.32: channels belong to workspaces now. The same reconcile the server
+    // runs at start-up creates the shared SmartConnect Collab workspace with
+    // its default channels and adds every active account (both seeded ones).
+    const shared = await reconcileSharedWorkspace();
+    console.log(`✅ Shared workspace ready (${shared.channelIds.length} channels, ${shared.membersAdded} member(s) added)`);
     console.log('\n🎉 Database seeding complete!');
 
     process.exit(0);

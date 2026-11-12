@@ -7,7 +7,7 @@ import { AuthForm } from '../../components/auth/AuthForm';
 import { useAuth } from '../../contexts/AuthContext';
 import { isAdminAccount } from '../../lib/admin';
 import { isInvitationToken } from '../../lib/invitationToken';
-import { LoadingScreen } from '../workspace/WorkspaceLayout';
+import { LoadingScreen } from '../../components/ui/LoadingScreen';
 
 // Shown instead of redirecting into the workspace when a join link now
 // requires admin approval (see PendingRequests in Directory.tsx) — the old
@@ -16,13 +16,13 @@ import { LoadingScreen } from '../workspace/WorkspaceLayout';
 // 'already_member', just not for a fresh 'pending' join request.
 const PendingApprovalScreen = () => (
   <div className="min-h-screen bg-[#faf9fa] flex items-center justify-center p-4 font-sans">
-    <div className="bg-white p-8 lg:p-10 rounded-[2rem] shadow-xl max-w-md w-full border border-gray-100 text-center">
+    <div className="bg-white p-8 lg:p-10 rounded-2xl shadow-xl max-w-md w-full border border-gray-100 text-center">
       <div className="w-16 h-16 bg-amber-50 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-6">
         <Clock size={32} />
       </div>
-      <h2 className="text-2xl font-black text-gray-900 mb-2">Request sent successfully!</h2>
+      <h2 className="text-2xl font-semibold text-gray-900 mb-2">Request sent successfully!</h2>
       <p className="text-gray-500 font-medium text-sm">Waiting for a workspace admin to approve your request. You'll be able to access the workspace once it's approved.</p>
-      <a href="/" className="inline-flex items-center gap-2 text-sm font-bold text-[#350d36] hover:text-purple-900 mt-8">
+      <a href="/" className="inline-flex items-center gap-2 text-sm font-bold text-brand hover:text-brand-hover mt-8">
         Go to home
       </a>
     </div>

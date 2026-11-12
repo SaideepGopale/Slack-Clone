@@ -1,7 +1,8 @@
 import axios from 'axios';
+import { toast } from 'react-toastify';
 import { Filter, Grid, Hash, List as ListIcon, Search, UserPlus, Users } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useWorkspace } from '../../pages/workspace/WorkspaceContext';
@@ -43,17 +44,27 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
   const visibleTabs = tabs.filter((tab) => !MANAGEMENT_TABS.has(tab) || canManageInvitations);
   const currentTab = visibleTabs.includes(activeTab) ? activeTab : 'Channels';
 
+  // T.32 (audit FE-8): a failed load is shown (with a retry) instead of
+  // looking like an empty directory; responses for a workspace the user has
+  // already left are ignored.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const fetchData = async () => {
+    const forWorkspace = workspaceId;
     try {
       setLoading(true);
+      setLoadError(null);
       const channelsRes = await axios.get('/api/channels/all', { params: { workspaceId } });
+      if (forWorkspace !== workspaceIdRef.current) return;
       setChannels(Array.isArray(channelsRes.data) ? channelsRes.data : []);
     } catch (err) {
-      console.error('Failed to fetch directory data', err);
+      if (forWorkspace !== workspaceIdRef.current) return;
+      setLoadError((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'The channel directory could not be loaded.');
     } finally {
-      setLoading(false);
+      if (forWorkspace === workspaceIdRef.current) setLoading(false);
     }
   };
+  const workspaceIdRef = useRef(workspaceId);
+  workspaceIdRef.current = workspaceId;
 
   useEffect(() => {
     fetchData();
@@ -89,7 +100,8 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
       await axios.post(`/api/channels/${channelId}/join`);
       onChannelJoined?.();
     } catch (err) {
-      console.error('Failed to join channel', err);
+      // T.32 (audit FE-8): say why instead of doing nothing.
+      toast.error((err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'You could not join this channel. Please try again.');
     }
   };
 
@@ -98,11 +110,11 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
   );
 
   return (
-    <div className="flex-1 flex flex-col bg-white overflow-hidden h-full selection:bg-slack-purple/10">
+    <div className="flex-1 flex flex-col bg-white overflow-hidden h-full selection:bg-brand-soft">
       
       {/* Header */}
       <div className="h-[49px] border-b border-gray-200 flex items-center justify-between px-4 md:px-5 shrink-0 bg-white z-20">
-        <h1 className="font-black text-base md:text-lg text-gray-900 tracking-tight flex items-center gap-2">
+        <h1 className="font-semibold text-base md:text-lg text-gray-900 tracking-tight flex items-center gap-2">
           {currentTab === 'People' && <Users size={18} className="text-gray-400" />}
           {currentTab === 'Channels' && <Hash size={18} className="text-gray-400" />}
           {currentTab}
@@ -128,16 +140,16 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
                   key={tab}
                   onClick={() => setActiveTab(tab)}
                   className={`py-3.5 text-[13px] font-bold border-b-2 transition-all relative whitespace-nowrap ${currentTab === tab
-                      ? 'border-slack-purple text-gray-900'
+                      ? 'border-brand text-gray-900'
                       : 'border-transparent text-gray-500 hover:text-gray-900'
                     }`}
                 >
                   {tab}
                   {tab === 'Invitations' && pendingInvites > 0 && (
-                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-gray-100 text-[10px] text-gray-500 font-black">{pendingInvites}</span>
+                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-gray-100 text-[10px] text-gray-500 font-semibold">{pendingInvites}</span>
                   )}
                   {tab === 'Join Requests' && pendingRequests > 0 && (
-                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-[10px] text-amber-700 font-black">{pendingRequests}</span>
+                    <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-amber-100 text-[10px] text-amber-700 font-semibold">{pendingRequests}</span>
                   )}
                 </button>
               ))}
@@ -156,18 +168,18 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="mb-8 p-6 md:p-8 rounded-2xl bg-gradient-to-br from-[#1264a3] to-[#0b4d7c] text-white flex flex-col md:flex-row items-center justify-between gap-6 shadow-[0_20px_50px_rgba(18,100,163,0.15)] ring-1 ring-white/10"
+            className="mb-8 p-6 md:p-8 rounded-2xl bg-sidebar text-white flex flex-col md:flex-row items-center justify-between gap-6 shadow-[0_20px_50px_rgba(18,100,163,0.15)] ring-1 ring-white/10"
           >
             <div className="flex items-center gap-6 text-center md:text-left flex-col md:flex-row">
               <div className="w-16 h-16 bg-white/10 rounded-2xl flex items-center justify-center backdrop-blur-md shrink-0 border border-white/20">
                 <UserPlus size={32} className="text-white" />
               </div>
               <div className="flex flex-col gap-1">
-                <h3 className="text-xl md:text-2xl font-black tracking-tight">Expand your workspace</h3>
+                <h3 className="text-xl md:text-2xl font-semibold tracking-tight">Expand your workspace</h3>
                 <p className="text-blue-100/70 text-sm font-medium max-w-md">Collaborate better with your teammates. Invite them to join #{filteredChannels[0]?.name || 'general'}.</p>
               </div>
             </div>
-            <button type="button" onClick={() => setIsInviteModalOpen(true)} className="theme-fixed w-full md:w-auto px-6 py-3 bg-white text-[#1264a3] font-black rounded-xl hover:bg-white/90 transition-colors text-[15px] shadow-xl shadow-black/10 shrink-0">
+            <button type="button" onClick={() => setIsInviteModalOpen(true)} className="theme-fixed w-full md:w-auto px-6 py-3 bg-white text-[#1264a3] font-semibold rounded-xl hover:bg-white/90 transition-colors text-[15px] shadow-xl shadow-black/10 shrink-0">
               Invite people
             </button>
           </motion.div>
@@ -179,8 +191,8 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
           {currentTab === 'Channels' && (
           <div className="flex flex-col sm:flex-row gap-3 mb-8">
             <div className="flex-1 relative group">
-              <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-slack-purple transition-colors" />
-              <input type="text" placeholder="Filter channels by name..." aria-label="Filter channels" value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-white border border-gray-200 rounded-xl py-2.5 pl-11 pr-4 text-[13px] font-medium outline-none focus:ring-2 focus:ring-slack-purple/10 focus:border-slack-purple transition-all shadow-sm" />
+              <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-brand transition-colors" />
+              <input type="text" placeholder="Filter channels by name..." aria-label="Filter channels" value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-white border border-gray-200 rounded-xl py-2.5 pl-11 pr-4 text-[13px] font-medium outline-none focus:ring-2 focus:ring-brand/10 focus:border-brand transition-all shadow-sm" />
             </div>
             <button onClick={() => setShowFilters(!showFilters)} className={`px-4 py-2.5 rounded-xl border flex items-center justify-center gap-2 text-[13px] font-bold transition-all ${showFilters ? 'bg-gray-100 border-gray-300 text-gray-900 shadow-inner' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
               <Filter size={16} /> Filter
@@ -193,12 +205,12 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
               <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden mb-6">
                 <div className="p-5 border border-gray-200 rounded-xl bg-gray-50/50 flex flex-wrap gap-4">
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Status</label>
-                    <select className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-bold outline-none focus:border-slack-purple"><option>All Members</option><option>Online Only</option><option>Away</option></select>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest">Status</label>
+                    <select className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-bold outline-none focus:border-brand"><option>All Members</option><option>Online Only</option><option>Away</option></select>
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Sort By</label>
-                    <select className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-bold outline-none focus:border-slack-purple"><option>A-Z</option><option>Newest Members</option></select>
+                    <label className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest">Sort By</label>
+                    <select className="bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-xs font-bold outline-none focus:border-brand"><option>A-Z</option><option>Newest Members</option></select>
                   </div>
                 </div>
               </motion.div>
@@ -206,9 +218,17 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
           </AnimatePresence>
 
           {loading ? (
-            <div className="flex flex-col items-center justify-center py-24 gap-4">
-              <div className="w-10 h-10 border-4 border-gray-100 border-t-slack-purple rounded-full animate-spin" />
-              <span className="text-gray-400 font-black text-sm uppercase tracking-widest">Scanning {currentTab}...</span>
+            <div className="space-y-2 py-4" role="status" aria-label={`Loading ${currentTab.toLowerCase()}`}>
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="skeleton h-16 rounded-xl" />
+              ))}
+            </div>
+          ) : loadError ? (
+            <div role="alert" className="flex flex-col items-center gap-3 py-16 text-center">
+              <p className="text-sm text-fg-muted">{loadError}</p>
+              <button type="button" onClick={() => void fetchData()} className="rounded-lg border border-line px-3 py-1.5 text-sm font-medium text-fg hover:bg-surface-tertiary">
+                Try again
+              </button>
             </div>
           ) : (
             <>
@@ -224,16 +244,16 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
                       <motion.div
                         key={channel.id}
                         whileHover={{ scale: 1.01 }}
-                        className="flex items-center justify-between p-5 bg-white border border-gray-200 rounded-2xl hover:border-slack-purple/40 hover:shadow-lg transition-all group"
+                        className="flex items-center justify-between p-5 bg-white border border-gray-200 rounded-2xl hover:border-brand/40 hover:shadow-lg transition-all group"
                       >
                         <div className="flex items-center gap-4">
                           <div className="w-12 h-12 rounded-xl bg-gray-50 flex items-center justify-center text-gray-300 border border-gray-100">
                             <Hash size={24} />
                           </div>
                           <div className="flex flex-col min-w-0">
-                            <span className="font-black text-gray-900 tracking-tight group-hover:text-slack-purple transition-colors">#{channel.name}</span>
+                            <span className="font-semibold text-gray-900 tracking-tight group-hover:text-brand transition-colors">#{channel.name}</span>
                             <div className="flex items-center gap-2 mt-0.5">
-                              <span className="text-[10px] bg-gray-100 text-gray-500 font-black px-1.5 py-0.5 rounded tracking-tighter uppercase">
+                              <span className="text-[10px] bg-gray-100 text-gray-500 font-semibold px-1.5 py-0.5 rounded tracking-tighter uppercase">
                                 {channel.isAnnouncement ? 'Announcement' : channel.visibility === 'PRIVATE' ? 'Private' : 'Public'}
                               </span>
                               <span className="text-[10px] text-gray-400 font-bold">Workspace Project</span>
@@ -244,11 +264,11 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
                         <div className="flex items-center gap-2">
                           {/* Batch 3/D: private channels are joined by invitation only. */}
                           {channel.isMember ? (
-                            <span className="px-3 py-2 text-[11px] font-black text-gray-400 uppercase tracking-wider">Joined</span>
+                            <span className="px-3 py-2 text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Joined</span>
                           ) : channel.visibility !== 'PRIVATE' ? (
                             <button
                               onClick={() => handleJoinChannel(channel.id)}
-                              className="px-5 py-2 bg-white border border-gray-300 text-gray-700 font-black rounded-lg hover:border-slack-purple hover:text-slack-purple hover:bg-slack-purple/5 transition-all text-[11px] uppercase tracking-wider"
+                              className="px-5 py-2 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:border-brand hover:text-brand hover:bg-brand/5 transition-all text-[11px] uppercase tracking-wider"
                             >
                               Join
                             </button>
@@ -273,7 +293,7 @@ export const Directory = ({ onChannelJoined, onlineUsers = [], onSelectUser }: {
               {currentTab === 'Channels' && filteredChannels.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-20 bg-gray-50/50 rounded-2xl border-2 border-dashed border-gray-200">
                   <Search size={32} className="text-gray-300 mb-4" />
-                  <p className="text-gray-400 font-black text-sm uppercase tracking-widest">No results found for "{search}"</p>
+                  <p className="text-gray-400 font-semibold text-sm uppercase tracking-widest">No results found for "{search}"</p>
                 </div>
               )}
             </>

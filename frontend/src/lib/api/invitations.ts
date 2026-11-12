@@ -28,6 +28,8 @@ export interface InviteResult {
   id: string;
   /** False when the invitation exists but the e-mail couldn't be delivered. */
   emailSent: boolean;
+  /** T.36: true when no e-mail could be sent because this server has no e-mail provider. */
+  emailUnavailable?: true;
 }
 
 /** GET /api/workspaces/:id/invitations — newest first, state computed server-side, no tokens. */
@@ -36,10 +38,15 @@ export const listWorkspaceInvitations = (workspaceId: string) =>
 
 /** POST /api/workspaces/:id/invites { email } */
 export const inviteByEmail = async (workspaceId: string, email: string): Promise<InviteResult> => {
-  const body = await http.post<{ id: string; token?: string; emailError?: string }>(`/api/workspaces/${seg(workspaceId)}/invites`, { email });
+  const body = await http.post<{ id: string; token?: string; emailError?: string; emailSent?: boolean; emailUnavailable?: boolean }>(
+    `/api/workspaces/${seg(workspaceId)}/invites`,
+    { email }
+  );
   // Deliberately NOT returning body.token (single-use credential) or the raw
-  // provider error text.
-  return { id: body.id, emailSent: !body.emailError };
+  // provider error text. T.36: the server's own emailSent wins (older servers
+  // only reported failures through emailError).
+  const emailSent = typeof body.emailSent === 'boolean' ? body.emailSent : !body.emailError;
+  return { id: body.id, emailSent, ...(body.emailUnavailable ? { emailUnavailable: true as const } : {}) };
 };
 
 export const revokeInvitation = (workspaceId: string, invitationId: string) =>

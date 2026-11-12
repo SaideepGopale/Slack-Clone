@@ -80,19 +80,20 @@ export const deleteFileHandler = async (req: AuthenticatedRequest, res: Response
     const result = await fileStorageService.deleteStoredFile(req.params.publicId);
     if (result.status === 'invalid') return res.status(400).json({ error: 'Invalid file id' });
     if (result.status === 'not_found') return res.status(404).json({ error: 'File not found' });
+    if (result.status === 'forbidden') return res.status(403).json({ error: 'Files in direct messages cannot be managed here.' });
+    if (result.status === 'storage_error') return res.status(502).json({ error: 'File storage did not respond. Please try again.' });
 
-    if (result.channelId && result.messageId) {
-      broadcastMessageDeleted(result.channelId, result.messageId);
-    }
+    for (const message of result.deletedMessages) broadcastMessageDeleted(message.channelId, message.id);
+    const count = result.deletedMessages.length;
     await logAuditEvent(
       req.user!.id,
       'DELETE_FILE',
       'FILE',
       req.params.publicId,
-      `Deleted file "${req.params.publicId}"${result.messageId ? ' (and its attached message)' : ''}`
+      `Deleted stored file "${req.params.publicId}"${count ? ` (and ${count} message${count === 1 ? '' : 's'} carrying it)` : ''}`
     );
 
-    res.json({ message: 'File deleted successfully' });
+    res.json({ message: 'File deleted successfully', deletedMessages: count });
   } catch (err) { next(err); }
 };
 

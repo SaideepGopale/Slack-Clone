@@ -18,6 +18,10 @@ if (!/^postgres(ql)?:\/\/[^@]+@(localhost|127\.0\.0\.1)(:\d+)?\//.test(DATABASE_
 const API_PORT = Number(process.env.E2E_API_PORT ?? 4100);
 const WEB_PORT = Number(process.env.E2E_WEB_PORT ?? 5174);
 const API_URL = `http://localhost:${API_PORT}`;
+// T.35: a local stand-in for Cloudinary's upload/download API (e2e/storage-stand-in.mjs),
+// so uploads and voice messages are tested end to end without cloud credentials.
+const STORAGE_PORT = Number(process.env.E2E_STORAGE_PORT ?? API_PORT + 2); // same rule in e2e/t35-uploads.spec.ts
+const STORAGE = { cloud: 'e2e-cloud', apiKey: 'e2e', secret: 'e2e' };
 
 export default defineConfig({
   testDir: './e2e',
@@ -57,10 +61,25 @@ export default defineConfig({
         APP_URL: `http://localhost:${WEB_PORT}`,
         // Local-only values; real secrets are never needed or read by E2E.
         JWT_SECRET: 'e2e-local-only-secret',
-        CLOUDINARY_CLOUD_NAME: 'e2e-cloud',
-        CLOUDINARY_API_KEY: 'e2e',
-        CLOUDINARY_API_SECRET: 'e2e',
+        CLOUDINARY_CLOUD_NAME: STORAGE.cloud,
+        CLOUDINARY_API_KEY: STORAGE.apiKey,
+        CLOUDINARY_API_SECRET: STORAGE.secret,
+        // The SDK's standard upload_prefix setting: uploads and signed
+        // downloads go to the local stand-in instead of api.cloudinary.com.
+        CLOUDINARY_URL: `cloudinary://${STORAGE.apiKey}:${STORAGE.secret}@${STORAGE.cloud}?upload_prefix=http://127.0.0.1:${STORAGE_PORT}`,
         RESEND_API_KEY: '',
+      },
+    },
+    {
+      command: 'node e2e/storage-stand-in.mjs',
+      port: STORAGE_PORT,
+      reuseExistingServer: false,
+      timeout: 30_000,
+      env: {
+        STORAGE_STAND_IN_PORT: String(STORAGE_PORT),
+        STORAGE_STAND_IN_CLOUD: STORAGE.cloud,
+        STORAGE_STAND_IN_API_KEY: STORAGE.apiKey,
+        STORAGE_STAND_IN_SECRET: STORAGE.secret,
       },
     },
     {

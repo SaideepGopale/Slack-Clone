@@ -62,6 +62,31 @@ enum ProjectRole {
   MEMBER
 }
 
+// T.33 — project & task management.
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+}
+
+enum TaskStatus {
+  BACKLOG
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  URGENT
+  HIGH
+  MEDIUM
+  LOW
+}
+
 enum JoinRequestStatus {
   PENDING
   APPROVED
@@ -118,8 +143,40 @@ model User {
   // Stage 2 (T.20): single-use activation invitations (relation fields only).
   accountInvitations      AccountInvitation[]    @relation("AccountInvitationAccount")
   accountInvitationsSent  AccountInvitation[]    @relation("AccountInvitationCreator")
+  // T.32 (audit H1): server-side sessions behind login tokens (relation field only).
+  authSessions            AuthSession[]
+  // T.32 (audit H3): private uploads this account made (relation field only).
+  attachmentsUploaded     Attachment[]           @relation("AttachmentUploader")
+  // T.33: project & task management (relation fields only).
+  tasksCreated            Task[]                 @relation("TaskCreator")
+  tasksAssigned           Task[]                 @relation("TaskAssignee")
+  taskComments            TaskComment[]
+  taskActivity            TaskActivity[]
+  workNotifications       WorkNotification[]     @relation("WorkNotificationRecipient")
+  workNotificationsActed  WorkNotification[]     @relation("WorkNotificationActor")
   createdAt               DateTime               @default(now())
   updatedAt               DateTime               @updatedAt
+}
+
+// T.32 (audit H1): the server-side record behind every login JWT. The token
+// carries this row's id as its `sid` claim; `authenticate` and the Socket.IO
+// handshake accept a token only while its row exists, is unrevoked and
+// unexpired, and the account is ACTIVE (lib/sessions.ts). Logout revokes one
+// row; a password reset/change, ban, suspension or deletion revokes them all
+// (deletion by cascade). Kept in its own table so the User (authentication)
+// table itself only gains a relation field.
+model AuthSession {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime  @default(now())
+  expiresAt  DateTime
+  lastUsedAt DateTime  @default(now())
+  revokedAt  DateTime?
+  // Truncated User-Agent, shown in the account's session list. No IP address is stored.
+  userAgent  String?
+
+  @@index([userId, revokedAt])
 }
 
 // The tenant boundary: every Channel and Invitation now belongs to exactly
@@ -166,11 +223,21 @@ model Workspace {
   usersLastActiveHere   User[]                 @relation("UserLastActiveWorkspace")
   joinRequests          WorkspaceJoinRequest[]
   inviteLinks           WorkspaceInviteLink[]
-  projects              Project[]
+  projects              Project[]              @relation("WorkspaceProjects")
+  // T.38: the workspace's "Team tasks" project, where the Team Lead dashboard
+  // files private assignments (created on first use). SetNull: deleting that
+  // project only means the next assignment creates a new one.
+  teamTasksProjectId    String?                @unique
+  teamTasksProject      Project?               @relation("WorkspaceTeamTasksProject", fields: [teamTasksProjectId], references: [id], onDelete: SetNull)
   // Stage 3 (T.22): Member activation invitations bound to this workspace.
   accountInvitations    AccountInvitation[]    @relation("AccountInvitationWorkspace")
+  // T.33: project & task management.
+  tasks                 Task[]
+  workNotifications     WorkNotification[]
 
   @@index([organizationId])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([ownerId])
 }
 
 // Batch 3 — the top of the hierarchy (Organization → Workspace → Channel).
@@ -208,25 +275,42 @@ model OrganizationMember {
 // optional; channels opt in via Channel.projectId. Projects are archived,
 // never hard-deleted (they disappear only with their workspace).
 model Project {
-  id           String            @id @default(uuid())
-  workspaceId  String
-  workspace    Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  name         String
-  description  String?
-  visibility   ProjectVisibility @default(PUBLIC)
-  archivedAt   DateTime?
+  id            String             @id @default(uuid())
+  workspaceId   String
+  workspace     Workspace          @relation("WorkspaceProjects", fields: [workspaceId], references: [id], onDelete: Cascade)
+  // T.38: set when this is a workspace's "Team tasks" project.
+  teamTasksOf   Workspace?         @relation("WorkspaceTeamTasksProject")
+  name          String
+  description   String?
+  visibility    ProjectVisibility  @default(PUBLIC)
+  archivedAt    DateTime?
   // SetNull: attribution only — deleting an account (frozen admin flow)
   // must never be blocked by, or take down, a project.
-  archivedById String?
-  archivedBy   User?             @relation("ProjectArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
-  createdById  String?
-  createdBy    User?             @relation("ProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
-  members      ProjectMember[]
-  channels     Channel[]
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  archivedById  String?
+  archivedBy    User?              @relation("ProjectArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
+  createdById   String?
+  createdBy     User?              @relation("ProjectCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  members       ProjectMember[]
+  channels      Channel[]
+  // T.33: lifecycle and task settings. "Archived" stays archivedAt.
+  status        ProjectStatus      @default(ACTIVE)
+  // Short code for task identifiers ("WEB-12"); derived from the name when null.
+  key           String?            @db.VarChar(6)
+  // Last task number handed out (incremented atomically per new task).
+  taskSequence  Int                @default(0)
+  // When true, only project leads may move a task to Done.
+  requireReview Boolean            @default(false)
+  startDate     DateTime?
+  dueDate       DateTime?
+  tasks         Task[]
+  notifications WorkNotification[]
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
 
   @@index([workspaceId, archivedAt])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([createdById])
+  @@index([archivedById])
 }
 
 model ProjectMember {
@@ -261,6 +345,8 @@ model WorkspaceInviteLink {
   createdAt   DateTime  @default(now())
 
   @@index([workspaceId, expiresAt])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([createdById])
 }
 
 model WorkspaceMember {
@@ -330,6 +416,8 @@ model AuditLog {
   createdAt  DateTime @default(now())
 
   @@index([createdAt])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([actorId])
 }
 
 // Temporary holding pen for a sign-up that hasn't proven ownership of its
@@ -424,6 +512,9 @@ model Channel {
   // table scan once Channel has any real volume.
   @@index([workspaceId])
   @@index([projectId])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([createdBy])
+  @@index([archivedById])
 }
 
 model Message {
@@ -468,6 +559,9 @@ model Message {
   clientId      String?
   reactions     Reaction[]
   notifications Notification[]
+  // T.32 (audit H3): the private upload this message carries, when it was
+  // sent after T.32 (fileUrl is then "/api/attachments/<id>"). Relation only.
+  attachment    Attachment?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   // P2: set only when the author edits the content (updatedAt also moves on
@@ -531,6 +625,8 @@ model Notification {
   // isRead is the second column, an efficient unread-only variant of the
   // same query/count without a second index.
   @@index([userId, isRead, createdAt(sort: Desc)])
+  // T.32 (audit L30): foreign keys used by deletes/cascades get an index.
+  @@index([messageId])
 }
 
 model ChannelMember {
@@ -663,4 +759,172 @@ model AccountInvitation {
   @@index([createdById])
   @@index([status, expiresAt])
   @@index([workspaceId, status])
+}
+
+// T.32 (audit H3): a private file upload. Stored in Cloudinary with delivery
+// type "authenticated" under a random public id, so the asset is neither
+// public nor guessable; the app hands out short-lived signed URLs only after
+// checking that the caller may see the message it is attached to
+// (lib/attachments.ts). The uploader is recorded at upload time and only the
+// uploader can attach it, exactly once (messageId is set on send).
+model Attachment {
+  id           String   @id @default(uuid())
+  // Cloudinary public id (includes the "workspace-uploads/" folder).
+  publicId     String   @unique
+  resourceType String
+  deliveryType String   @default("authenticated")
+  // Cloudinary's detected format for image/video assets (null for raw files,
+  // whose extension is part of publicId).
+  format       String?
+  originalName String
+  mimeType     String
+  size         Int
+  // SetNull: a deleted account's messages survive (reassigned to the
+  // sentinel), so their attachments must too.
+  uploaderId   String?
+  uploader     User?    @relation("AttachmentUploader", fields: [uploaderId], references: [id], onDelete: SetNull)
+  // Set exactly once when the upload is sent in a message. SetNull when the
+  // message goes (channel/workspace deletion cascades): the asset is then an
+  // orphan and is destroyed by the attachment sweeper.
+  messageId    String?  @unique
+  message      Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  // T.33: a file attached to a task (SetNull: the sweeper destroys orphans).
+  taskId       String?
+  task         Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  // T.33: voice notes — recorded length and a compact waveform ("0..100" x ≤ 64).
+  durationMs   Int?
+  waveform     String?  @db.VarChar(400)
+  createdAt    DateTime @default(now())
+
+  @@index([uploaderId, createdAt])
+  @@index([taskId])
+  @@index([messageId, createdAt])
+}
+
+// T.33 — tasks. A task belongs to one project (and, denormalised for
+// workspace-wide queries such as "my tasks", to its workspace). Subtasks are
+// tasks with a parent in the same project. `number` is unique per project
+// (identifier = project key + number). `position` orders a board column.
+model Task {
+  id                String             @id @default(uuid())
+  projectId         String
+  project           Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workspaceId       String
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  number            Int
+  title             String             @db.VarChar(200)
+  description       String?
+  status            TaskStatus         @default(TODO)
+  priority          TaskPriority       @default(MEDIUM)
+  // SetNull: attribution/assignment never blocks deleting an account.
+  creatorId         String?
+  creator           User?              @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  assigneeId        String?
+  assignee          User?              @relation("TaskAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  parentId          String?
+  parent            Task?              @relation("Subtasks", fields: [parentId], references: [id], onDelete: Cascade)
+  subtasks          Task[]             @relation("Subtasks")
+  startDate         DateTime?
+  dueDate           DateTime?
+  estimateHours     Float?
+  actualHours       Float?
+  labels            String[]           @default([])
+  position          Float              @default(0)
+  completedAt       DateTime?
+  // Set when the overdue reminder went out (idempotent reminder job).
+  overdueNotifiedAt DateTime?
+  // T.38: a private assignment (Team Lead dashboard): visible only to its
+  // assignee, its creator and the workspace's leads — never to other members
+  // of the project or workspace. Existing tasks stay visible to their project.
+  assigneeOnly      Boolean            @default(false)
+  comments          TaskComment[]
+  activity          TaskActivity[]
+  // This task depends on (is blocked by) `dependsOn` tasks…
+  dependencies      TaskDependency[]   @relation("TaskDependencyTask")
+  // …and blocks these.
+  dependents        TaskDependency[]   @relation("TaskDependencyDependsOn")
+  attachments       Attachment[]
+  notifications     WorkNotification[]
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@unique([projectId, number])
+  @@index([projectId, status, position])
+  @@index([assigneeId, status])
+  @@index([creatorId, createdAt])
+  @@index([workspaceId, dueDate])
+  @@index([parentId])
+  @@index([workspaceId, assigneeId])
+}
+
+model TaskComment {
+  id        String    @id @default(uuid())
+  taskId    String
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorId  String?
+  author    User?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  body      String
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+
+  @@index([taskId, createdAt])
+  @@index([authorId])
+}
+
+// Per-task history (created, status/assignee/priority/date changes, comments,
+// dependencies, shares). `data` holds the before/after values.
+model TaskActivity {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  type      String   @db.VarChar(40)
+  data      Json?
+  createdAt DateTime @default(now())
+
+  @@index([taskId, createdAt])
+  @@index([actorId])
+}
+
+// taskId is blocked by dependsOnId. Cycles are refused by the API (checked
+// under a per-project lock).
+model TaskDependency {
+  id          String   @id @default(uuid())
+  taskId      String
+  task        Task     @relation("TaskDependencyTask", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOnId String
+  dependsOn   Task     @relation("TaskDependencyDependsOn", fields: [dependsOnId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+
+  @@unique([taskId, dependsOnId])
+  @@index([dependsOnId])
+}
+
+// T.33: in-app notifications for work items (assignment, comments, status,
+// overdue). Separate from the chat Notification table, which is tied to a
+// message.
+model WorkNotification {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation("WorkNotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  workspaceId String
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  projectId   String?
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  taskId      String?
+  task        Task?     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actorId     String?
+  actor       User?     @relation("WorkNotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  type        String    @db.VarChar(40)
+  title       String    @db.VarChar(300)
+  body        String?   @db.VarChar(500)
+  readAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([userId, workspaceId, readAt, createdAt])
+  @@index([taskId])
+  @@index([projectId])
+  @@index([actorId])
+  @@index([workspaceId])
 }

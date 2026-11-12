@@ -67,9 +67,19 @@ services:
       # shared test sender (delivers only to the Resend account owner).
       - key: EMAIL_FROM
         sync: false
+      # Calls: a TURN relay (e.g. a coturn server with use-auth-secret) lets
+      # calls connect behind strict NATs/firewalls. Optional — leave empty to
+      # use STUN only (calls then work on open networks only). Comma-separated
+      # turn:/turns: URLs; the shared secret makes short-lived per-user
+      # credentials (CALL_TURN_USERNAME/CALL_TURN_CREDENTIAL for static ones).
+      - key: CALL_TURN_URLS
+        sync: false
+      - key: CALL_TURN_SECRET
+        sync: false
       # Express trusts exactly one proxy hop in production (Render's load
       # balancer), so rate limits see each client's own IP. Override only if
       # needed with TRUST_PROXY (a hop count, true/false or an Express value).
+      # Real-time state is per process: keep this service at ONE instance.
 
   - type: web
     name: smartconnect-frontend
@@ -83,6 +93,25 @@ services:
       - type: rewrite
         source: /*
         destination: /index.html
+    # T.32 (audit L32): baseline browser security headers for the web app.
+    # (No Content-Security-Policy yet: the API and Socket.IO origins are set
+    # at build time, so a CSP must be written for the final URLs — see T.32.)
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: strict-origin-when-cross-origin
+      - path: /*
+        name: Strict-Transport-Security
+        value: max-age=31536000; includeSubDomains
+      - path: /*
+        name: Permissions-Policy
+        value: camera=(self), microphone=(self), display-capture=(self), geolocation=(), payment=()
     envVars:
       - key: NODE_VERSION
         value: 22.14.0

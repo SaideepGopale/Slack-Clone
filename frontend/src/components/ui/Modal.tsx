@@ -10,10 +10,14 @@ interface ModalProps {
   size?: 'md' | 'lg';
 }
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 /**
  * Accessible dialog shell: role="dialog" + aria-modal, labelled by its title,
- * closes on Escape and on backdrop click, moves focus into the dialog on open
- * and restores it to the previously focused element on close.
+ * closes on Escape and on backdrop click, moves focus into the dialog on open,
+ * keeps Tab / Shift+Tab inside it (T.32), and restores focus to the previously
+ * focused element on close. Enters with a short scale/fade (reduced-motion
+ * aware via index.css).
  */
 export const Modal = ({ title, subtitle, onClose, children, footer, size = 'md' }: ModalProps) => {
   const titleId = useId();
@@ -28,7 +32,24 @@ export const Modal = ({ title, subtitle, onClose, children, footer, size = 'md' 
     );
     (first ?? dialogRef.current)?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCloseRef.current();
+      if (e.key === 'Escape') {
+        // A nested dialog (e.g. a confirmation) handles its own Escape first.
+        if (dialogRef.current && !dialogRef.current.contains(document.activeElement) && document.activeElement !== document.body) return;
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== 'Tab' || !dialogRef.current) return;
+      const nodes = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((n) => n.offsetParent !== null || n === document.activeElement);
+      if (nodes.length === 0) return;
+      const firstNode = nodes[0];
+      const lastNode = nodes[nodes.length - 1];
+      if (e.shiftKey && (document.activeElement === firstNode || !dialogRef.current.contains(document.activeElement))) {
+        e.preventDefault();
+        lastNode.focus();
+      } else if (!e.shiftKey && (document.activeElement === lastNode || !dialogRef.current.contains(document.activeElement))) {
+        e.preventDefault();
+        firstNode.focus();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => {
@@ -39,7 +60,8 @@ export const Modal = ({ title, subtitle, onClose, children, footer, size = 'md' 
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4"
+      // T.39: on phones (< 640px) dialogs rise from the bottom edge as sheets; unchanged from 640px up.
+      className="fixed inset-0 z-[100] flex items-end justify-center bg-overlay animate-fade-in sm:items-center sm:p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -50,27 +72,27 @@ export const Modal = ({ title, subtitle, onClose, children, footer, size = 'md' 
         aria-modal="true"
         aria-labelledby={titleId}
         tabIndex={-1}
-        className={`bg-surface text-fg rounded-2xl w-full ${size === 'lg' ? 'max-w-2xl' : 'max-w-md'} max-h-[85vh] flex flex-col shadow-2xl outline-none`}
+        className={`flex max-h-[92dvh] w-full flex-col rounded-t-2xl border border-line bg-surface pb-[env(safe-area-inset-bottom)] text-fg shadow-2xl outline-none animate-sheet-in sm:max-h-[85vh] sm:rounded-2xl sm:pb-0 sm:animate-scale-in ${size === 'lg' ? 'max-w-2xl' : 'max-w-md'}`}
       >
-        <div className="flex items-start gap-3 p-6 pb-4 shrink-0">
-          <div className="flex-1 min-w-0">
-            <h2 id={titleId} className="text-lg font-black text-gray-900 tracking-tight truncate">
+        <div className="flex shrink-0 items-start gap-3 px-5 pb-3 pt-5">
+          <div className="min-w-0 flex-1">
+            <h2 id={titleId} className="truncate text-base font-semibold tracking-[-0.01em] text-fg">
               {title}
             </h2>
-            {subtitle && <p className="text-xs text-gray-500 mt-0.5">{subtitle}</p>}
+            {subtitle && <p className="mt-0.5 text-xs text-fg-subtle">{subtitle}</p>}
           </div>
           <button
             type="button"
             data-modal-close
             onClick={onClose}
             aria-label="Close dialog"
-            className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg"
+            className="rounded-md p-1.5 text-fg-subtle transition-colors hover:bg-surface-tertiary hover:text-fg"
           >
-            <X size={18} aria-hidden="true" />
+            <X size={16} aria-hidden="true" />
           </button>
         </div>
-        <div className="px-6 pb-4 overflow-y-auto flex-1 min-h-0">{children}</div>
-        {footer && <div className="px-6 py-4 border-t border-gray-100 shrink-0 flex justify-end gap-2">{footer}</div>}
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">{children}</div>
+        {footer && <div className="flex shrink-0 justify-end gap-2 border-t border-line px-5 py-3.5">{footer}</div>}
       </div>
     </div>
   );

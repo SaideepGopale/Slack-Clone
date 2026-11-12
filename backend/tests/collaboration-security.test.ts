@@ -275,7 +275,9 @@ describe('frozen authentication contract (regression)', () => {
     expect(res.status).toBe(200);
     expect(Object.keys(res.body.user).sort()).toEqual(['email', 'id', 'lastActiveWorkspaceId', 'role', 'username']);
     const claims = jwt.decode(res.body.token) as Record<string, number | string>;
-    expect(Object.keys(claims).sort()).toEqual(['exp', 'iat', 'id', 'role', 'username']);
+    // T.32 (audit H1): one claim added — `sid`, the server-side session that
+    // makes the token revocable. Same user shape, claims, lifetime and algorithm otherwise.
+    expect(Object.keys(claims).sort()).toEqual(['exp', 'iat', 'id', 'role', 'sid', 'username']);
     expect(Number(claims.exp) - Number(claims.iat)).toBe(7 * 24 * 60 * 60);
   });
 });

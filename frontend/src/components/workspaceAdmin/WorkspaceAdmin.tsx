@@ -209,7 +209,7 @@ export const WorkspaceAdmin = ({ workspaceId, layoutWorkspaceId }: WorkspaceAdmi
           </div>
         )}
         {tab === 'members' && <WorkspaceMembersPanel workspaceId={workspaceId} settings={data} access={access} viewerId={user?.id} socket={socket} />}
-        {tab === 'invitations' && access.canManageInvitations && <InvitationsPanel workspaceId={workspaceId} />}
+        {tab === 'invitations' && access.canManageInvitations && <InvitationsPanel workspaceId={workspaceId} emailInvitationsAvailable={data.emailInvitationsAvailable ?? true} />}
         {tab === 'requests' && access.canManageInvitations && <JoinRequestsPanel workspaceId={workspaceId} />}
       </TabPanel>
       <DeleteWorkspaceModal

@@ -78,7 +78,7 @@ export const ProfileModal = ({ workspaceId, userId, currentUserId, canManage, vi
       {profile && (
         <div className="space-y-5">
           <div className="flex items-center gap-4">
-            <span className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-violet-700 text-white flex items-center justify-center text-2xl font-black uppercase">
+            <span className="w-16 h-16 rounded-2xl bg-accent-600 text-white flex items-center justify-center text-2xl font-semibold uppercase">
               {profile.username[0]}
             </span>
             <div className="min-w-0">

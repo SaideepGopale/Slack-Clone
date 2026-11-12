@@ -135,6 +135,8 @@ describe('GET /api/auth/me', () => {
 
   it('rejects a malformed token', async () => {
     const res = await request(app).get('/api/auth/me').set(authHeader('not-a-real-token'));
-    expect(res.status).toBe(403);
+    // T.32 (audit H1): every authentication failure is 401 (was 403) — the
+    // client's single "session over" signal; 403 means "signed in, not allowed".
+    expect(res.status).toBe(401);
   });
 });

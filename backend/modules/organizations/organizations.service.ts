@@ -138,10 +138,13 @@ export const ensureOrganizationsForUser = async (userId: string) => {
  */
 export const ensureOrganizationMembership = async (workspaceId: string, userId: string) => {
   const organizationId = await ensureWorkspaceOrganization(workspaceId);
-  await prisma.organizationMember.upsert({
-    where: { organizationId_userId: { organizationId, userId } },
-    update: {},
-    create: { organizationId, userId, role: 'MEMBER' },
+  // T.32 (audit M14): INSERT … ON CONFLICT DO NOTHING. The previous upsert
+  // (find, then insert) raced when two requests for the same person ran at
+  // once — e.g. a double-submitted invitation accept — and the loser got a
+  // unique-constraint error and a 500. Never downgrades an existing role.
+  await prisma.organizationMember.createMany({
+    data: [{ organizationId, userId, role: 'MEMBER' }],
+    skipDuplicates: true,
   });
 };
 

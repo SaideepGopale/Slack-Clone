@@ -69,6 +69,16 @@ vi.mock('../../components/chat/CallOverlay', async (importOriginal) => ({
   ),
 }));
 
+// T.33: a stand-in for the pre-join lobby (which would open the camera).
+vi.mock('../../components/chat/CallLobby', () => ({
+  CallLobby: ({ joinLabel, onJoin, onCancel }: { joinLabel: string; onJoin: (m: { audio: boolean; video: boolean }) => void; onCancel: () => void }) => (
+    <div data-testid="call-lobby">
+      <button type="button" onClick={() => onJoin({ audio: true, video: false })}>{`lobby: ${joinLabel}`}</button>
+      <button type="button" onClick={onCancel}>lobby: cancel</button>
+    </div>
+  ),
+}));
+
 const noop = () => undefined;
 
 describe('parseIncomingCall', () => {
@@ -213,6 +223,10 @@ describe('WorkspaceLayout incoming calls', () => {
     act(() => socket.receive('call:incoming', { channelId: 'chan-1', callType: 'video', callerName: 'bob', from: 'u2' }));
     expect(screen.getByText('bob')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Accept/ }));
+    // T.33: answering opens the lobby first; joining from it starts the call.
+    expect(screen.getByTestId('call-lobby')).toBeInTheDocument();
+    expect(screen.queryByTestId('call-overlay')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'lobby: Join call' }));
     expect(screen.getByTestId('call-overlay')).toHaveTextContent('video call in chan-1');
     expect(screen.queryByText(/Incoming/)).toBeNull();
 
@@ -224,8 +238,37 @@ describe('WorkspaceLayout incoming calls', () => {
   it('starting a call sends only the channel and call type, never a caller name', async () => {
     const socket = await renderLayout();
     fireEvent.click(screen.getByRole('button', { name: 'probe: start audio call' }));
+    // T.33: nobody is rung while the caller is still in the lobby.
+    expect(socket.emitted('call:initiate')).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'lobby: Start call' }));
     expect(socket.emitted('call:initiate')).toEqual([{ channelId: 'chan-1', callType: 'audio' }]);
     expect(screen.getByTestId('call-overlay')).toHaveTextContent('audio call in chan-1');
+  });
+
+  it('T.33 lobby: backing out before joining rings nobody; answering then backing out declines', async () => {
+    const socket = await renderLayout();
+    fireEvent.click(screen.getByRole('button', { name: 'probe: start audio call' }));
+    fireEvent.click(screen.getByRole('button', { name: 'lobby: cancel' }));
+    expect(screen.queryByTestId('call-lobby')).toBeNull();
+    expect(socket.emitted('call:initiate')).toEqual([]);
+    expect(socket.emitted('call:cancel')).toEqual([]);
+    expect(socket.emitted('webrtc:leave')).toEqual([]);
+
+    act(() => socket.receive('call:incoming', { channelId: 'chan-1', callType: 'audio', callerName: 'bob', from: 'u2' }));
+    fireEvent.click(screen.getByRole('button', { name: /Accept/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'lobby: cancel' }));
+    expect(socket.emitted('call:decline')).toEqual([{ channelId: 'chan-1' }]);
+    expect(screen.queryByTestId('call-overlay')).toBeNull();
+  });
+
+  it('T.33 lobby: the caller hanging up closes the answering lobby', async () => {
+    const socket = await renderLayout();
+    act(() => socket.receive('call:incoming', { channelId: 'chan-1', callType: 'audio', callerName: 'bob', from: 'u2' }));
+    fireEvent.click(screen.getByRole('button', { name: /Accept/ }));
+    expect(screen.getByTestId('call-lobby')).toBeInTheDocument();
+    act(() => socket.receive('call:ring_ended', { channelId: 'chan-1', reason: 'cancelled' }));
+    expect(screen.queryByTestId('call-lobby')).toBeNull();
+    expect(screen.queryByTestId('call-overlay')).toBeNull();
   });
 
   // ── P2 Phase H: ringing lifecycle ──
@@ -251,6 +294,7 @@ describe('WorkspaceLayout incoming calls', () => {
   it("ends the caller's call when nobody answers, and cancels the ring when the caller hangs up", async () => {
     const socket = await renderLayout();
     fireEvent.click(screen.getByRole('button', { name: 'probe: start audio call' }));
+    fireEvent.click(screen.getByRole('button', { name: 'lobby: Start call' }));
     expect(screen.getByTestId('call-overlay')).toBeInTheDocument();
     act(() => socket.receive('call:ring_ended', { channelId: 'chan-1', reason: 'timeout' }));
     expect(screen.queryByTestId('call-overlay')).toBeNull();
@@ -261,6 +305,7 @@ describe('WorkspaceLayout incoming calls', () => {
   it('an answered ring keeps the call going; an accepted call never sends a cancel', async () => {
     const socket = await renderLayout();
     fireEvent.click(screen.getByRole('button', { name: 'probe: start audio call' }));
+    fireEvent.click(screen.getByRole('button', { name: 'lobby: Start call' }));
     act(() => socket.receive('call:ring_ended', { channelId: 'chan-1', reason: 'answered' }));
     expect(screen.getByTestId('call-overlay')).toBeInTheDocument();
     expect(socket.emitted('call:cancel')).toEqual([]);

@@ -39,7 +39,7 @@ export const WorkspaceSwitcher = () => {
   };
 
   return (
-    <nav aria-label="Workspaces" className="theme-fixed w-[68px] h-full bg-violet-950 flex flex-col items-center py-3 gap-2 shrink-0 overflow-y-auto no-scrollbar">
+    <nav aria-label="Workspaces" className="theme-fixed w-[60px] h-full bg-sidebar border-r border-white/[0.06] flex flex-col items-center py-3 gap-2 shrink-0 overflow-y-auto no-scrollbar">
       {groups.map((group, groupIndex) => (
         <div
           key={group.key}
@@ -48,7 +48,7 @@ export const WorkspaceSwitcher = () => {
           className="w-full flex flex-col items-center gap-2"
         >
           {groupIndex > 0 && <div aria-hidden="true" className="w-8 h-px bg-white/10 my-0.5 shrink-0" />}
-          <div aria-hidden="true" title={group.label} className="text-[9px] font-bold uppercase tracking-wider text-violet-300/70 select-none">
+          <div aria-hidden="true" title={group.label} className="text-[9px] font-bold uppercase tracking-wider text-sidebar-fg-muted select-none">
             {group.short}
           </div>
           {group.workspaces.map((ws) => {
@@ -60,8 +60,8 @@ export const WorkspaceSwitcher = () => {
                 {/* Active-workspace indicator — a white pill flush against the
                     left edge, same convention Slack uses for "you are here". */}
                 <div
-                  className={`absolute left-0 w-1 rounded-r-full bg-white transition-all duration-200 ${
-                    isActive ? 'h-8' : 'h-0 group-hover:h-2'
+                  className={`absolute left-0 w-[3px] rounded-r-full bg-accent-300 transition-all duration-200 ${
+                    isActive ? 'h-7' : 'h-0 group-hover:h-2'
                   }`}
                 />
                 <button
@@ -69,15 +69,13 @@ export const WorkspaceSwitcher = () => {
                   title={tooltip}
                   aria-label={`${name}${isActive ? ' (current workspace)' : ''}`}
                   aria-current={isActive ? 'page' : undefined}
-                  className={`w-11 h-11 flex items-center justify-center font-black text-lg shrink-0 transition-all duration-200 active:scale-95 ${
-                    ws.isDefault
-                      ? 'rounded-2xl bg-violet-600 text-white shadow-lg shadow-violet-900/40 ring-2 ring-white/20'
-                      : isActive
-                        ? 'rounded-2xl bg-violet-600 text-white shadow-lg shadow-violet-900/40'
-                        : 'rounded-3xl bg-white/10 hover:rounded-2xl hover:bg-violet-600/80 text-white'
-                  }`}
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center font-semibold text-[15px] shrink-0 transition-colors active:scale-95 ${
+                    isActive
+                      ? 'bg-accent-500 text-white'
+                      : 'bg-white/[0.07] text-sidebar-fg hover:bg-white/[0.13]'
+                  } ${ws.isDefault && !isActive ? 'ring-1 ring-inset ring-white/15' : ''}`}
                 >
-                  {ws.isDefault ? <Globe size={20} /> : (ws.name?.[0]?.toUpperCase() || 'W')}
+                  {ws.isDefault ? <Globe size={18} aria-hidden="true" /> : (ws.name?.[0]?.toUpperCase() || 'W')}
                 </button>
               </div>
             );
@@ -91,9 +89,9 @@ export const WorkspaceSwitcher = () => {
         onClick={() => setShowCreateModal(true)}
         title="Create a workspace"
         aria-label="Create a workspace"
-        className="w-11 h-11 rounded-3xl hover:rounded-2xl bg-white/10 hover:bg-violet-600/80 text-violet-200 hover:text-white flex items-center justify-center transition-all duration-200 active:scale-95 mt-1 shrink-0"
+        className="w-10 h-10 rounded-xl border border-dashed border-white/20 text-sidebar-fg-muted hover:border-white/40 hover:text-sidebar-fg flex items-center justify-center transition-colors active:scale-95 mt-1 shrink-0"
       >
-        <Plus size={20} />
+        <Plus size={18} aria-hidden="true" />
       </button>
       )}
       <button
@@ -101,11 +99,11 @@ export const WorkspaceSwitcher = () => {
         title="Organizations"
         aria-label="Organizations"
         aria-current={onOrganizations ? 'page' : undefined}
-        className={`w-11 h-11 rounded-3xl hover:rounded-2xl flex items-center justify-center transition-all duration-200 active:scale-95 shrink-0 ${
-          onOrganizations ? 'bg-violet-600 text-white rounded-2xl' : 'bg-white/10 hover:bg-violet-600/80 text-violet-200 hover:text-white'
+        className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors active:scale-95 shrink-0 ${
+          onOrganizations ? 'bg-accent-500 text-white' : 'bg-white/[0.07] text-sidebar-fg-muted hover:bg-white/[0.13] hover:text-sidebar-fg'
         }`}
       >
-        <Building2 size={20} />
+        <Building2 size={18} aria-hidden="true" />
       </button>
 
       <CreateWorkspaceModal
